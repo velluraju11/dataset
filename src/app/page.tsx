@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
@@ -47,6 +48,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { Slider } from '@/components/ui/slider';
+import { Separator } from '@/components/ui/separator';
 
 const MAX_ENTRIES = 10000;
 
@@ -71,8 +73,12 @@ export default function DataGeniusPage() {
   const [countdown, setCountdown] = useState<number | null>(null);
   
   const [modificationInstruction, setModificationInstruction] = useState('');
-  const [modificationEntryId, setModificationEntryId] = useState('');
+  const [modificationEntryIds, setModificationEntryIds] = useState('');
   const [isModifying, setIsModifying] = useState(false);
+  const [modificationPreview, setModificationPreview] = useState<{
+    original: DataEntry;
+    modified: DataEntry;
+  } | null>(null);
 
 
   const isGeneratingRef = useRef(false);
@@ -246,47 +252,80 @@ export default function DataGeniusPage() {
 };
 
  const handleModifyEntry = async () => {
-    if (!modificationInstruction.trim() || !modificationEntryId.trim()) {
-      toast({ variant: 'destructive', title: 'Error', description: 'Please provide an Entry ID and a modification instruction.' });
+    if (!modificationInstruction.trim() || !modificationEntryIds.trim()) {
+      toast({ variant: 'destructive', title: 'Error', description: 'Please provide Entry IDs and a modification instruction.' });
       return;
     }
 
-    const entryIdNum = parseInt(modificationEntryId, 10);
-    const entryToModify = fullDataRef.current.find(e => e.id === entryIdNum);
+    const idsToModify = modificationEntryIds
+      .split(',')
+      .map(id => parseInt(id.trim(), 10))
+      .filter(id => !isNaN(id));
 
-    if (!entryToModify) {
-      toast({ variant: 'destructive', title: 'Error', description: `Entry with ID ${entryIdNum} not found.` });
+    if (idsToModify.length === 0) {
+      toast({ variant: 'destructive', title: 'Error', description: 'Please enter valid, comma-separated Entry IDs.' });
+      return;
+    }
+
+    const entriesToModify = idsToModify
+      .map(id => fullDataRef.current.find(e => e.id === id))
+      .filter((e): e is DataEntry => !!e);
+
+    const foundIds = new Set(entriesToModify.map(e => e.id));
+    const notFoundIds = idsToModify.filter(id => !foundIds.has(id));
+
+    if (notFoundIds.length > 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: `Could not find entries with IDs: ${notFoundIds.join(', ')}.`,
+      });
+    }
+
+    if (entriesToModify.length === 0) {
       return;
     }
 
     setIsModifying(true);
     setError(null);
+    setModificationPreview(null);
 
     try {
-      const modifiedEntry = await modifyDatasetEntry({
-        instruction: modificationInstruction,
-        entry: entryToModify,
-      });
+      const modificationPromises = entriesToModify.map(entryToModify =>
+        modifyDatasetEntry({
+          instruction: modificationInstruction,
+          entry: entryToModify,
+        }).then(modifiedEntry => ({
+          original: entryToModify,
+          modified: modifiedEntry,
+        }))
+      );
+
+      const results = await Promise.all(modificationPromises);
       
-      const updateIndex = fullDataRef.current.findIndex(e => e.id === modifiedEntry.id);
-      if (updateIndex !== -1) {
-        fullDataRef.current[updateIndex] = modifiedEntry;
-        // Also update preview if it's there
-        const previewIndex = dataPreview.findIndex(e => e.id === modifiedEntry.id);
-        if (previewIndex !== -1) {
-            const newPreview = [...dataPreview];
-            newPreview[previewIndex] = modifiedEntry;
-            setDataPreview(newPreview);
-        }
-        toast({ title: 'Success', description: `Entry ${modifiedEntry.id} has been modified.` });
+      const modifiedEntryMap = new Map(results.map(r => [r.modified.id, r.modified]));
+
+      fullDataRef.current = fullDataRef.current.map(entry =>
+        modifiedEntryMap.get(entry.id) || entry
+      );
+
+      setDataPreview(prev => prev.map(entry =>
+        modifiedEntryMap.get(entry.id) || entry
+      ));
+      
+      if (results.length > 0) {
+        setModificationPreview(results[results.length - 1]);
       }
+
+      toast({ title: 'Success', description: `Modified ${results.length} entries.` });
+
     } catch (e: any) {
       console.error(e);
-      setError(e.message || 'Failed to modify entry.');
+      setError(e.message || 'Failed to modify entries.');
       toast({ variant: 'destructive', title: 'Modification Failed', description: e.message });
     } finally {
       setIsModifying(false);
-      setModificationEntryId('');
+      setModificationEntryIds('');
       setModificationInstruction('');
     }
   };
@@ -475,44 +514,76 @@ export default function DataGeniusPage() {
             </Card>
 
             <Card className="shadow-lg">
-                <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                        <Edit className="text-primary" />
-                        <span>Modify Dataset Entry</span>
-                    </CardTitle>
-                    <CardDescription>
-                        Enter the ID of an entry and an instruction to modify it with AI.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-                        <div className="sm:col-span-1 space-y-2">
-                            <Label htmlFor="modify-id">Entry ID</Label>
-                            <Input 
-                                id="modify-id" 
-                                placeholder="e.g., 42"
-                                value={modificationEntryId}
-                                onChange={(e) => setModificationEntryId(e.target.value)}
-                                disabled={isModifying}
-                            />
-                        </div>
-                        <div className="sm:col-span-3 space-y-2">
-                            <Label htmlFor="modify-instruction">Instruction</Label>
-                            <Textarea
-                                id="modify-instruction"
-                                placeholder="e.g., 'Make the output more enthusiastic.'"
-                                className="min-h-[40px]"
-                                value={modificationInstruction}
-                                onChange={(e) => setModificationInstruction(e.target.value)}
-                                disabled={isModifying}
-                            />
-                        </div>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Edit className="text-primary" />
+                  <span>Modify Dataset Entries</span>
+                </CardTitle>
+                <CardDescription>
+                  Enter comma-separated IDs and an instruction to modify them with AI.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                    <div className="sm:col-span-1 space-y-2">
+                      <Label htmlFor="modify-ids">Entry IDs</Label>
+                      <Input
+                        id="modify-ids"
+                        placeholder="e.g., 42, 101, 5"
+                        value={modificationEntryIds}
+                        onChange={(e) => setModificationEntryIds(e.target.value)}
+                        disabled={isModifying}
+                      />
                     </div>
-                    <Button onClick={handleModifyEntry} disabled={isModifying} className="mt-4 w-full sm:w-auto">
-                        {isModifying ? <Loader className="animate-spin mr-2" /> : <RefreshCw className="mr-2" />}
-                        Modify Entry
-                    </Button>
-                </CardContent>
+                    <div className="sm:col-span-3 space-y-2">
+                      <Label htmlFor="modify-instruction">Instruction</Label>
+                      <Textarea
+                        id="modify-instruction"
+                        placeholder="e.g., 'Make the output more enthusiastic.'"
+                        className="min-h-[40px]"
+                        value={modificationInstruction}
+                        onChange={(e) => setModificationInstruction(e.target.value)}
+                        disabled={isModifying}
+                      />
+                    </div>
+                  </div>
+                  <Button onClick={handleModifyEntry} disabled={isModifying} className="w-full sm:w-auto">
+                    {isModifying ? <Loader className="animate-spin mr-2" /> : <RefreshCw className="mr-2" />}
+                    Modify Entries
+                  </Button>
+                </div>
+              </CardContent>
+
+              {modificationPreview && (
+                <>
+                  <Separator className="my-4" />
+                  <CardHeader className="pt-0">
+                    <CardTitle>Modification Preview (ID: {modificationPreview.original.id})</CardTitle>
+                    <CardDescription>Showing the last modified entry.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <h4 className="font-semibold mb-2 text-muted-foreground">Before</h4>
+                        <div className="p-4 border rounded-lg space-y-3 text-sm bg-muted/20">
+                          <p><strong className="font-medium text-foreground">Context:</strong> {modificationPreview.original.context}</p>
+                          <p><strong className="font-medium text-foreground">Input:</strong> {modificationPreview.original.input}</p>
+                          <p><strong className="font-medium text-foreground">Output:</strong> {modificationPreview.original.output}</p>
+                        </div>
+                      </div>
+                      <div>
+                        <h4 className="font-semibold mb-2 text-foreground">After</h4>
+                        <div className="p-4 border rounded-lg space-y-3 text-sm bg-primary/10 border-primary/50">
+                          <p><strong className="font-medium text-foreground">Context:</strong> {modificationPreview.modified.context}</p>
+                          <p><strong className="font-medium text-foreground">Input:</strong> {modificationPreview.modified.input}</p>
+                          <p><strong className="font-medium text-foreground">Output:</strong> {modificationPreview.modified.output}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </>
+              )}
             </Card>
 
           </div>
@@ -553,3 +624,4 @@ export default function DataGeniusPage() {
     </div>
   );
 }
+
