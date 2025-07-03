@@ -52,6 +52,7 @@ const MAX_ENTRIES = 10000;
 
 type DataEntry = {
   id: number;
+  context: string;
   input: string;
   output: string;
 };
@@ -152,12 +153,13 @@ export default function DataGeniusPage() {
   };
 
   const handleDownloadCsv = () => {
-    const header = 'id,input,output\n';
+    const header = 'id,context,input,output\n';
     const csvContent = fullDataRef.current
         .map(e => {
+            const context = `"${e.context.replace(/"/g, '""')}"`;
             const input = `"${e.input.replace(/"/g, '""')}"`;
             const output = `"${e.output.replace(/"/g, '""')}"`;
-            return `${e.id},${input},${output}`;
+            return `${e.id},${context},${input},${output}`;
         })
         .join('\n');
     downloadFile('datagenius_dataset.csv', header + csvContent, 'text/csv;charset=utf-8;');
@@ -438,6 +440,7 @@ export default function DataGeniusPage() {
                           <TableHeader className="sticky top-0 bg-card">
                               <TableRow>
                                   <TableHead className="w-[100px]">ID</TableHead>
+                                  <TableHead>Context</TableHead>
                                   <TableHead>Input</TableHead>
                                   <TableHead>Output</TableHead>
                               </TableRow>
@@ -447,13 +450,14 @@ export default function DataGeniusPage() {
                                   dataPreview.map(entry => (
                                       <TableRow key={entry.id}>
                                           <TableCell className="font-medium">{entry.id}</TableCell>
+                                          <TableCell>{entry.context}</TableCell>
                                           <TableCell>{entry.input}</TableCell>
                                           <TableCell>{entry.output}</TableCell>
                                       </TableRow>
                                   ))
                               ) : (
                                   <TableRow>
-                                      <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
+                                      <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
                                           {isGenerating ? 'Generating data...' : 'Generated data will appear here.'}
                                       </TableCell>
                                   </TableRow>

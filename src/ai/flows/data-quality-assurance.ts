@@ -13,6 +13,7 @@ import {z} from 'genkit';
 
 const DataEntrySchema = z.object({
     id: z.number(),
+    context: z.string(),
     input: z.string(),
     output: z.string(),
 });
@@ -34,15 +35,16 @@ const modifyEntryPrompt = ai.definePrompt({
   name: 'modifyEntryPrompt',
   input: {schema: ModifyDatasetEntryInputSchema},
   output: {schema: ModifyDatasetEntryOutputSchema},
-  prompt: `You are an AI assistant that modifies dataset entries. You will be given a dataset entry with an 'id', 'input', and 'output'. You will also be given an instruction.
+  prompt: `You are an AI assistant that modifies dataset entries. You will be given a dataset entry with an 'id', 'context', 'input', and 'output'. You will also be given an instruction.
 
-Your task is to modify the 'input' and/or 'output' fields of the entry according to the instruction.
+Your task is to modify the 'context', 'input', and/or 'output' fields of the entry according to the instruction.
 - You MUST maintain the original 'id'.
 - The modified 'input' must still start with 'ryha'.
 - The modified 'output' must still address the user as 'boss'.
 
 Original Entry:
 - ID: {{{entry.id}}}
+- Context: {{{entry.context}}}
 - Input: {{{entry.input}}}
 - Output: {{{entry.output}}}
 

@@ -18,6 +18,7 @@ const GenerateSyntheticEntryInputSchema = z.object({
 export type GenerateSyntheticEntryInput = z.infer<typeof GenerateSyntheticEntryInputSchema>;
 
 const GenerateSyntheticEntryOutputSchema = z.object({
+    context: z.string().describe("A short, one-sentence scenario or background for the command."),
     input: z.string().describe("The generated input command, which must start with 'ryha'."),
     output: z.string().describe("The generated output response, which must address the user as 'boss'.")
 });
@@ -37,10 +38,11 @@ Product Requirements Document:
 "{{{prd}}}"
 
 Instructions for generation:
-1.  Create a user command for the 'input' field. This command MUST start with the word "ryha".
-2.  Create a response for the 'output' field. This response MUST address the user as "boss".
-3.  Ensure the entry is consistent with the PRD.
-4.  Do not repeat examples. Be creative.
+1.  Create a short, one-sentence scenario or background for the 'context' field.
+2.  Create a user command for the 'input' field based on the context. This command MUST start with the word "ryha".
+3.  Create a response for the 'output' field. This response MUST address the user as "boss".
+4.  Ensure the entry is consistent with the PRD.
+5.  Do not repeat examples. Be creative.
 `,
 });
 
