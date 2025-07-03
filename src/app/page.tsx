@@ -10,10 +10,11 @@ import {
   Download,
   Play,
   StopCircle,
+  RefreshCw,
+  Edit,
 } from 'lucide-react';
-import { analyzePRDForTemperature } from '@/ai/flows/analyze-prd-temperature';
-import { generateSyntheticData } from '@/ai/flows/generate-synthetic-data';
-import { ensureDataQualityWithReasoning } from '@/ai/flows/data-quality-assurance';
+import { generateSyntheticEntry } from '@/ai/flows/generate-synthetic-data';
+import { modifyDatasetEntry } from '@/ai/flows/data-quality-assurance';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -45,14 +46,14 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
-import { Badge } from '@/components/ui/badge';
-import type { AnalyzePRDForTemperatureOutput } from '@/ai/flows/analyze-prd-temperature';
+import { Slider } from '@/components/ui/slider';
 
-const MAX_ENTRIES = 10000; // Reduced for demo purposes from 1,000,000
+const MAX_ENTRIES = 10000;
 
 type DataEntry = {
   id: number;
-  content: string;
+  input: string;
+  output: string;
 };
 
 export default function DataGeniusPage() {
@@ -60,26 +61,51 @@ export default function DataGeniusPage() {
   const [tempApiKey, setTempApiKey] = useState('');
   const [isApiKeySaved, setIsApiKeySaved] = useState(false);
   const [prd, setPrd] = useState('');
+  const [temperature, setTemperature] = useState(0.7);
   const [dataPreview, setDataPreview] = useState<DataEntry[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [showKeyDialog, setShowKeyDialog] = useState(false);
-  const [temperatureInfo, setTemperatureInfo] =
-    useState<AnalyzePRDForTemperatureOutput | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  
+  const [modificationInstruction, setModificationInstruction] = useState('');
+  const [modificationEntryId, setModificationEntryId] = useState('');
+  const [isModifying, setIsModifying] = useState(false);
+
 
   const isGeneratingRef = useRef(false);
+  const isPausedByUserRef = useRef(false);
   const fullDataRef = useRef<DataEntry[]>([]);
+  const isMounted = useRef(true);
 
   const { toast } = useToast();
 
   useEffect(() => {
+    isMounted.current = true;
     const savedKey = localStorage.getItem('gemini_api_key');
     if (savedKey) {
       setApiKey(savedKey);
       setIsApiKeySaved(true);
     }
+    return () => {
+      isMounted.current = false;
+      isGeneratingRef.current = false; // Stop generation on unmount
+    };
   }, []);
+  
+  useEffect(() => {
+      let timer: NodeJS.Timeout;
+      if (countdown !== null && countdown > 0) {
+        setError(`An error occurred. Resuming in ${countdown} seconds...`);
+        timer = setTimeout(() => setCountdown(countdown - 1), 1000);
+      } else if (countdown === 0) {
+        setCountdown(null);
+        setError(null);
+        handleGenerate();
+      }
+      return () => clearTimeout(timer);
+  }, [countdown]);
 
   const handleSaveKey = (key: string) => {
     if (key) {
@@ -102,106 +128,167 @@ export default function DataGeniusPage() {
 
   const handleStop = () => {
     isGeneratingRef.current = false;
+    isPausedByUserRef.current = true;
     setIsGenerating(false);
+    setCountdown(null);
     setError('Data generation stopped by user.');
   };
 
   const isApiKeyError = (e: any): boolean => {
-    const msg = e.message.toLowerCase();
+    const msg = e.message?.toLowerCase() || '';
     return msg.includes('api key') || msg.includes('429') || msg.includes('rate limit');
   };
-
-  const handleDownload = () => {
-    const csvContent =
-      'data:text/csv;charset=utf-8,' +
-      'id,content\n' +
-      fullDataRef.current
-        .map(e => `${e.id},"${e.content.replace(/"/g, '""')}"`)
-        .join('\n');
-    const encodedUri = encodeURI(csvContent);
+  
+  const downloadFile = (filename: string, content: string, mimeType: string) => {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', 'datagenius_dataset.csv');
+    link.setAttribute('href', url);
+    link.setAttribute('download', filename);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadCsv = () => {
+    const header = 'id,input,output\n';
+    const csvContent = fullDataRef.current
+        .map(e => {
+            const input = `"${e.input.replace(/"/g, '""')}"`;
+            const output = `"${e.output.replace(/"/g, '""')}"`;
+            return `${e.id},${input},${output}`;
+        })
+        .join('\n');
+    downloadFile('datagenius_dataset.csv', header + csvContent, 'text/csv;charset=utf-8;');
   };
   
+  const handleDownloadJson = () => {
+      const jsonContent = JSON.stringify(fullDataRef.current, null, 2);
+      downloadFile('datagenius_dataset.json', jsonContent, 'application/json;charset=utf-8;');
+  };
+
   const handleGenerate = async () => {
     if (!prd.trim()) {
         toast({ variant: 'destructive', title: 'Error', description: 'Product Requirements Document (PRD) cannot be empty.' });
         return;
     }
 
+    if (isGeneratingRef.current) return;
+
     setError(null);
-    setTemperatureInfo(null);
+    isPausedByUserRef.current = false;
     isGeneratingRef.current = true;
     setIsGenerating(true);
-    fullDataRef.current = [];
-    setDataPreview([]);
-    setProgress(0);
-
+    
     try {
-        const tempAnalysis = await analyzePRDForTemperature({ prd });
-        setTemperatureInfo(tempAnalysis);
-
         while (fullDataRef.current.length < MAX_ENTRIES && isGeneratingRef.current) {
-            let successfulChunk = false;
+            let successfulEntry = false;
             let retries = 0;
-
-            while (!successfulChunk && retries < 3 && isGeneratingRef.current) {
+            
+            while(!successfulEntry && retries < 3 && isGeneratingRef.current) {
                 try {
-                    const modifiedPrd = prd + `\n\n---\n\nGenerate a small, sample dataset of about 5-10 diverse and human-like entries based on the above PRD. Format the output as plain text, with each entry on a new line. Do not include headers or numbering.`;
-                    const dataChunk = await generateSyntheticData({ prd: modifiedPrd });
+                    const result = await generateSyntheticEntry({ prd, temperature });
                     
-                    const entries = dataChunk.split('\n').filter(line => line.trim() !== '');
-
-                    for (const entry of entries) {
-                        if (!isGeneratingRef.current || fullDataRef.current.length >= MAX_ENTRIES) break;
-                        
-                        const qualityResult = await ensureDataQualityWithReasoning({ prd, datasetEntry: entry });
-                        
+                    if (isGeneratingRef.current) {
                         const newId = fullDataRef.current.length + 1;
-                        const newEntry = { id: newId, content: qualityResult.refinedDatasetEntry };
+                        const newEntry = { id: newId, ...result };
 
                         fullDataRef.current.push(newEntry);
-                        setDataPreview(prev => [newEntry, ...prev].slice(0, 100));
                         
-                        const newProgress = Math.min(100, (fullDataRef.current.length / MAX_ENTRIES) * 100);
-                        setProgress(newProgress);
+                        if (isMounted.current) {
+                            setDataPreview(prev => [newEntry, ...prev].slice(0, 100));
+                            const newProgress = (fullDataRef.current.length / MAX_ENTRIES) * 100;
+                            setProgress(newProgress);
+                        }
                     }
-                    successfulChunk = true;
+                    successfulEntry = true;
+                    setError(null);
 
                 } catch (e: any) {
                     console.error(e);
-                    retries++;
                     if (isApiKeyError(e)) {
-                        setError('API key limit reached or invalid. Please provide a new key to continue.');
+                        setError('API key limit reached or invalid. Please provide a new key to resume.');
                         setShowKeyDialog(true);
                         isGeneratingRef.current = false;
-                        setIsGenerating(false);
-                        return;
+                        if(isMounted.current) setIsGenerating(false);
+                        return; // Stop and wait for user
                     }
-                    setError(`An error occurred. Retrying in 5 seconds... (Attempt ${retries})`);
+                    retries++;
+                    setError(`An error occurred. Retrying... (Attempt ${retries})`);
                     await new Promise(res => setTimeout(res, 5000));
-                    setError(null);
                 }
             }
-            if (!successfulChunk) {
-                throw new Error("Failed to generate data after multiple retries.");
+            if (!successfulEntry) {
+                 throw new Error("Failed to generate data after multiple retries. Pausing.");
             }
         }
     } catch (e: any) {
         console.error(e);
-        setError(e.message || 'An unexpected error occurred.');
+        setError(e.message || 'An unexpected error occurred. Pausing generation.');
     } finally {
+        if (!isMounted.current) return;
+        
+        const stoppedForError = !isPausedByUserRef.current && fullDataRef.current.length < MAX_ENTRIES;
+
         isGeneratingRef.current = false;
         setIsGenerating(false);
-        if (fullDataRef.current.length >= MAX_ENTRIES) {
+        
+        if (stoppedForError) {
+             setCountdown(10);
+        } else if (fullDataRef.current.length >= MAX_ENTRIES) {
              toast({ title: "Success!", description: "Dataset generation complete." });
+             setProgress(100);
         }
     }
 };
+
+ const handleModifyEntry = async () => {
+    if (!modificationInstruction.trim() || !modificationEntryId.trim()) {
+      toast({ variant: 'destructive', title: 'Error', description: 'Please provide an Entry ID and a modification instruction.' });
+      return;
+    }
+
+    const entryIdNum = parseInt(modificationEntryId, 10);
+    const entryToModify = fullDataRef.current.find(e => e.id === entryIdNum);
+
+    if (!entryToModify) {
+      toast({ variant: 'destructive', title: 'Error', description: `Entry with ID ${entryIdNum} not found.` });
+      return;
+    }
+
+    setIsModifying(true);
+    setError(null);
+
+    try {
+      const modifiedEntry = await modifyDatasetEntry({
+        instruction: modificationInstruction,
+        entry: entryToModify,
+      });
+      
+      const updateIndex = fullDataRef.current.findIndex(e => e.id === modifiedEntry.id);
+      if (updateIndex !== -1) {
+        fullDataRef.current[updateIndex] = modifiedEntry;
+        // Also update preview if it's there
+        const previewIndex = dataPreview.findIndex(e => e.id === modifiedEntry.id);
+        if (previewIndex !== -1) {
+            const newPreview = [...dataPreview];
+            newPreview[previewIndex] = modifiedEntry;
+            setDataPreview(newPreview);
+        }
+        toast({ title: 'Success', description: `Entry ${modifiedEntry.id} has been modified.` });
+      }
+    } catch (e: any) {
+      console.error(e);
+      setError(e.message || 'Failed to modify entry.');
+      toast({ variant: 'destructive', title: 'Modification Failed', description: e.message });
+    } finally {
+      setIsModifying(false);
+      setModificationEntryId('');
+      setModificationInstruction('');
+    }
+  };
+
 
   return (
     <div className="min-h-screen bg-background font-body text-foreground">
@@ -224,8 +311,7 @@ export default function DataGeniusPage() {
                   <span>API Key Management</span>
                 </CardTitle>
                 <CardDescription>
-                  Enter your Gemini API key. It will be saved securely in your
-                  browser.
+                  Enter your Gemini API key. It will be saved in your browser.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -248,14 +334,11 @@ export default function DataGeniusPage() {
                       <Save className="h-4 w-4" />
                     </Button>
                   </div>
-                  {isApiKeySaved && (
+                   {isApiKeySaved && (
                     <p className="text-sm text-green-600">
                       API Key is configured.
                     </p>
                   )}
-                   <p className="text-xs text-muted-foreground pt-2">
-                    Note: For this demo, API calls may rely on a pre-configured server key if yours fails.
-                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -267,23 +350,37 @@ export default function DataGeniusPage() {
                   <span>Product Requirements</span>
                 </CardTitle>
                 <CardDescription>
-                  Describe the dataset you want to generate. Be as detailed as
-                  possible.
+                  Describe the dataset you want to generate.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <Textarea
-                  placeholder="e.g., 'A dataset of customer support chat logs for an e-commerce fashion store. Include user complaints, questions about returns, and positive feedback...'"
+                  placeholder="e.g., 'A dataset of customer support chat logs for an e-commerce fashion store...'"
                   className="min-h-[200px]"
                   value={prd}
                   onChange={e => setPrd(e.target.value)}
                   disabled={isGenerating}
                 />
+                 <div className="space-y-3 mt-4">
+                    <div className="flex justify-between">
+                        <Label htmlFor="temperature">Creativity (Temperature)</Label>
+                        <span className="text-sm font-medium text-primary">{temperature.toFixed(2)}</span>
+                    </div>
+                    <Slider
+                        id="temperature"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={[temperature]}
+                        onValueChange={(vals) => setTemperature(vals[0])}
+                        disabled={isGenerating}
+                    />
+                </div>
               </CardContent>
             </Card>
           </div>
 
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-2 flex flex-col gap-8">
             <Card className="shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -291,12 +388,12 @@ export default function DataGeniusPage() {
                   <span>AI Data Generation</span>
                 </CardTitle>
                 <CardDescription>
-                  Start the generation process. You can stop anytime. Progress is auto-saved.
+                  Start the generation process. You can stop anytime.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="flex flex-col sm:flex-row gap-4 mb-6">
-                  {!isGenerating ? (
+                  {!isGenerating && countdown === null ? (
                     <Button className="w-full sm:w-auto flex-grow bg-primary hover:bg-primary/90" onClick={handleGenerate} disabled={!isApiKeySaved || !prd}>
                       <Play className="mr-2" />
                       Generate Dataset
@@ -308,9 +405,13 @@ export default function DataGeniusPage() {
                     </Button>
                   )}
 
-                  <Button className="w-full sm:w-auto" variant="secondary" onClick={handleDownload} disabled={fullDataRef.current.length === 0}>
+                  <Button className="w-full sm:w-auto" variant="secondary" onClick={handleDownloadCsv} disabled={fullDataRef.current.length === 0}>
                     <Download className="mr-2" />
                     Download CSV
+                  </Button>
+                  <Button className="w-full sm:w-auto" variant="secondary" onClick={handleDownloadJson} disabled={fullDataRef.current.length === 0}>
+                    <Download className="mr-2" />
+                    Download JSON
                   </Button>
                 </div>
 
@@ -325,17 +426,10 @@ export default function DataGeniusPage() {
                         <Progress value={progress} className="w-full" />
                     </div>
 
-                    {temperatureInfo && (
-                        <div className="p-4 bg-muted/50 rounded-lg border">
-                            <h4 className="font-semibold text-sm mb-1">AI Temperature Analysis</h4>
-                            <p className="text-sm text-muted-foreground">
-                                <Badge variant="outline" className="mr-2 border-accent text-accent">{temperatureInfo.temperature.toFixed(2)}</Badge>
-                                {temperatureInfo.reasoning}
-                            </p>
-                        </div>
-                    )}
-
-                    {error && <p className="text-sm text-destructive">{error}</p>}
+                    {error && <p className="text-sm text-destructive flex items-center gap-2">
+                        {countdown !== null && <RefreshCw className="h-4 w-4 animate-spin"/>}
+                        {error}
+                    </p>}
                 </div>
 
                 <div className="mt-6 relative">
@@ -343,8 +437,9 @@ export default function DataGeniusPage() {
                       <Table>
                           <TableHeader className="sticky top-0 bg-card">
                               <TableRow>
-                                  <TableHead className="w-[100px]">Entry ID</TableHead>
-                                  <TableHead>Generated Data</TableHead>
+                                  <TableHead className="w-[100px]">ID</TableHead>
+                                  <TableHead>Input</TableHead>
+                                  <TableHead>Output</TableHead>
                               </TableRow>
                           </TableHeader>
                           <TableBody>
@@ -352,12 +447,13 @@ export default function DataGeniusPage() {
                                   dataPreview.map(entry => (
                                       <TableRow key={entry.id}>
                                           <TableCell className="font-medium">{entry.id}</TableCell>
-                                          <TableCell>{entry.content}</TableCell>
+                                          <TableCell>{entry.input}</TableCell>
+                                          <TableCell>{entry.output}</TableCell>
                                       </TableRow>
                                   ))
                               ) : (
                                   <TableRow>
-                                      <TableCell colSpan={2} className="h-24 text-center text-muted-foreground">
+                                      <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
                                           {isGenerating ? 'Generating data...' : 'Generated data will appear here.'}
                                       </TableCell>
                                   </TableRow>
@@ -373,6 +469,48 @@ export default function DataGeniusPage() {
                 </div>
               </CardContent>
             </Card>
+
+            <Card className="shadow-lg">
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Edit className="text-primary" />
+                        <span>Modify Dataset Entry</span>
+                    </CardTitle>
+                    <CardDescription>
+                        Enter the ID of an entry and an instruction to modify it with AI.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                        <div className="sm:col-span-1 space-y-2">
+                            <Label htmlFor="modify-id">Entry ID</Label>
+                            <Input 
+                                id="modify-id" 
+                                placeholder="e.g., 42"
+                                value={modificationEntryId}
+                                onChange={(e) => setModificationEntryId(e.target.value)}
+                                disabled={isModifying}
+                            />
+                        </div>
+                        <div className="sm:col-span-3 space-y-2">
+                            <Label htmlFor="modify-instruction">Instruction</Label>
+                            <Textarea
+                                id="modify-instruction"
+                                placeholder="e.g., 'Make the output more enthusiastic.'"
+                                className="min-h-[40px]"
+                                value={modificationInstruction}
+                                onChange={(e) => setModificationInstruction(e.target.value)}
+                                disabled={isModifying}
+                            />
+                        </div>
+                    </div>
+                    <Button onClick={handleModifyEntry} disabled={isModifying} className="mt-4 w-full sm:w-auto">
+                        {isModifying ? <Loader className="animate-spin mr-2" /> : <RefreshCw className="mr-2" />}
+                        Modify Entry
+                    </Button>
+                </CardContent>
+            </Card>
+
           </div>
         </div>
       </main>
@@ -395,12 +533,11 @@ export default function DataGeniusPage() {
             />
           </div>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel onClick={() => isPausedByUserRef.current = true }>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => {
               if (handleSaveKey(tempApiKey)) {
                 setShowKeyDialog(false);
                 setError(null);
-                // Automatically resume generation
                 handleGenerate();
               }
             }}>

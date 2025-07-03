@@ -1,60 +1,59 @@
 'use server';
 
 /**
- * @fileOverview This file defines a Genkit flow for generating synthetic, humanized datasets from a Product Requirements Document (PRD).
+ * @fileOverview This file defines a Genkit flow for generating a single synthetic, humanized dataset entry from a Product Requirements Document (PRD).
  *
- * - generateSyntheticData - An async function that takes a PRD as input and returns a synthetic dataset.
- * - GenerateSyntheticDataInput - The input type for the generateSyntheticData function, which is a PRD string.
- * - GenerateSyntheticDataOutput - The output type for the generateSyntheticData function, which is a string representing the generated dataset.
+ * - generateSyntheticEntry - An async function that takes a PRD and temperature as input and returns a single synthetic data entry.
+ * - GenerateSyntheticEntryInput - The input type for the generateSyntheticEntry function.
+ * - GenerateSyntheticEntryOutput - The output type for the generateSyntheticEntry function.
  */
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
 
-const GenerateSyntheticDataInputSchema = z.object({
+const GenerateSyntheticEntryInputSchema = z.object({
   prd: z.string().describe('The Product Requirements Document to use as a basis for data generation.'),
+  temperature: z.number().min(0).max(1).describe('The creativity temperature for the generation.'),
 });
-export type GenerateSyntheticDataInput = z.infer<typeof GenerateSyntheticDataInputSchema>;
+export type GenerateSyntheticEntryInput = z.infer<typeof GenerateSyntheticEntryInputSchema>;
 
-const GenerateSyntheticDataOutputSchema = z.string().describe('The generated synthetic dataset.');
-export type GenerateSyntheticDataOutput = z.infer<typeof GenerateSyntheticDataOutputSchema>;
+const GenerateSyntheticEntryOutputSchema = z.object({
+    input: z.string().describe("The generated input command, which must start with 'ryha'."),
+    output: z.string().describe("The generated output response, which must address the user as 'boss'.")
+});
+export type GenerateSyntheticEntryOutput = z.infer<typeof GenerateSyntheticEntryOutputSchema>;
 
-export async function generateSyntheticData(input: GenerateSyntheticDataInput): Promise<GenerateSyntheticDataOutput> {
-  return generateSyntheticDataFlow(input);
+export async function generateSyntheticEntry(input: GenerateSyntheticEntryInput): Promise<GenerateSyntheticEntryOutput> {
+  return generateSyntheticEntryFlow(input);
 }
 
-const analyzePrdPrompt = ai.definePrompt({
-  name: 'analyzePrdPrompt',
-  input: {schema: GenerateSyntheticDataInputSchema},
-  output: {schema: z.object({temperature: z.number().describe('The ideal temperature for generating data from this PRD.')})},
-  prompt: `You are an expert product manager. Please analyze the following Product Requirements Document and determine an ideal temperature setting for generating data based on it. Return ONLY the temperature value.
+const generateEntryPrompt = ai.definePrompt({
+  name: 'generateEntryPrompt',
+  input: {schema: GenerateSyntheticEntryInputSchema},
+  output: {schema: GenerateSyntheticEntryOutputSchema},
+  prompt: `You are an expert in generating humanized datasets. Based on the following Product Requirements Document, generate a single, unique, and creative dataset entry.
 
-PRD: {{{prd}}}`,
+Product Requirements Document:
+"{{{prd}}}"
+
+Instructions for generation:
+1.  Create a user command for the 'input' field. This command MUST start with the word "ryha".
+2.  Create a response for the 'output' field. This response MUST address the user as "boss".
+3.  Ensure the entry is consistent with the PRD.
+4.  Do not repeat examples. Be creative.
+`,
 });
 
-const generateDatasetPrompt = ai.definePrompt({
-  name: 'generateDatasetPrompt',
-  input: {schema: GenerateSyntheticDataInputSchema},
-  output: {schema: GenerateSyntheticDataOutputSchema},
-  prompt: `You are an expert in generating humanized datasets. Based on the following Product Requirements Document, generate a synthetic dataset.
-
-PRD: {{{prd}}}
-
-Dataset:`,
-  // TODO: How to resume?
-});
-
-const generateSyntheticDataFlow = ai.defineFlow(
+const generateSyntheticEntryFlow = ai.defineFlow(
   {
-    name: 'generateSyntheticDataFlow',
-    inputSchema: GenerateSyntheticDataInputSchema,
-    outputSchema: GenerateSyntheticDataOutputSchema,
+    name: 'generateSyntheticEntryFlow',
+    inputSchema: GenerateSyntheticEntryInputSchema,
+    outputSchema: GenerateSyntheticEntryOutputSchema,
   },
-  async input => {
-    const {output: tempAnalysis} = await analyzePrdPrompt(input);
-    const {output: dataset} = await generateDatasetPrompt(input, {
-      config: {temperature: tempAnalysis?.temperature},
+  async (input) => {
+    const {output} = await generateEntryPrompt(input, {
+      config: {temperature: input.temperature},
     });
-    return dataset!;
+    return output!;
   }
 );

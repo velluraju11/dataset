@@ -1,64 +1,66 @@
-// Ensure this file has 'use server' directive.
 'use server';
 
 /**
- * @fileOverview A Genkit flow for ensuring data quality with AI reasoning.
+ * @fileOverview This file defines a Genkit flow for modifying a dataset entry based on user instructions.
  *
- * - ensureDataQualityWithReasoning - A function that enhances data quality using Gemini's reasoning.
- * - EnsureDataQualityWithReasoningInput - The input type for the ensureDataQualityWithReasoning function.
- * - EnsureDataQualityWithReasoningOutput - The return type for the ensureDataQualityWithReasoning function.
+ * - modifyDatasetEntry - An async function that takes an instruction and a dataset entry and returns the modified entry.
+ * - ModifyDatasetEntryInput - The input type for the modifyDatasetEntry function.
+ * - ModifyDatasetEntryOutput - The output type for the modifyDatasetEntry function.
  */
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
 
-const EnsureDataQualityWithReasoningInputSchema = z.object({
-  prd: z.string().describe('The Product Requirements Document (PRD) to analyze.'),
-  datasetEntry: z.string().describe('A single entry in the generated dataset.'),
+const DataEntrySchema = z.object({
+    id: z.number(),
+    input: z.string(),
+    output: z.string(),
 });
-export type EnsureDataQualityWithReasoningInput = z.infer<typeof EnsureDataQualityWithReasoningInputSchema>;
 
-const EnsureDataQualityWithReasoningOutputSchema = z.object({
-  refinedDatasetEntry: z.string().describe('The refined dataset entry, incorporating AI reasoning and considerations.'),
-  reasoning: z.string().describe('Explanation of the AI reasoning applied to refine the dataset entry.'),
+const ModifyDatasetEntryInputSchema = z.object({
+  instruction: z.string().describe('The user instruction for how to modify the dataset entry.'),
+  entry: DataEntrySchema.describe('The dataset entry to modify.'),
 });
-export type EnsureDataQualityWithReasoningOutput = z.infer<typeof EnsureDataQualityWithReasoningOutputSchema>;
+export type ModifyDatasetEntryInput = z.infer<typeof ModifyDatasetEntryInputSchema>;
 
-export async function ensureDataQualityWithReasoning(input: EnsureDataQualityWithReasoningInput): Promise<EnsureDataQualityWithReasoningOutput> {
-  return ensureDataQualityWithReasoningFlow(input);
+const ModifyDatasetEntryOutputSchema = DataEntrySchema;
+export type ModifyDatasetEntryOutput = z.infer<typeof ModifyDatasetEntryOutputSchema>;
+
+export async function modifyDatasetEntry(input: ModifyDatasetEntryInput): Promise<ModifyDatasetEntryOutput> {
+  return modifyDatasetEntryFlow(input);
 }
 
-const prompt = ai.definePrompt({
-  name: 'ensureDataQualityWithReasoningPrompt',
-  input: {schema: EnsureDataQualityWithReasoningInputSchema},
-  output: {schema: EnsureDataQualityWithReasoningOutputSchema},
-  prompt: `You are an AI data quality expert. Given a product requirements document (PRD) and a dataset entry, use your reasoning capabilities to identify potential issues, suggest improvements, and incorporate additional considerations to ensure the highest possible quality.
+const modifyEntryPrompt = ai.definePrompt({
+  name: 'modifyEntryPrompt',
+  input: {schema: ModifyDatasetEntryInputSchema},
+  output: {schema: ModifyDatasetEntryOutputSchema},
+  prompt: `You are an AI assistant that modifies dataset entries. You will be given a dataset entry with an 'id', 'input', and 'output'. You will also be given an instruction.
 
-PRD: {{{prd}}}
+Your task is to modify the 'input' and/or 'output' fields of the entry according to the instruction.
+- You MUST maintain the original 'id'.
+- The modified 'input' must still start with 'ryha'.
+- The modified 'output' must still address the user as 'boss'.
 
-Dataset Entry: {{{datasetEntry}}}
+Original Entry:
+- ID: {{{entry.id}}}
+- Input: {{{entry.input}}}
+- Output: {{{entry.output}}}
 
-Reasoning:
-1.  Analyze the PRD to understand the product requirements and goals.
-2.  Evaluate the dataset entry in the context of the PRD.
-3.  Identify any potential issues, inconsistencies, or areas for improvement.
-4.  Suggest refinements or additional considerations to enhance the dataset entry's quality and relevance.
-5. Return a refined dataset entry incorporating these refinements.
+Modification Instruction:
+"{{{instruction}}}"
 
-Refined Dataset Entry:`, // Ensure that there is no use of a helper function or function calls
+Return only the JSON for the modified entry.
+`,
 });
 
-const ensureDataQualityWithReasoningFlow = ai.defineFlow(
+const modifyDatasetEntryFlow = ai.defineFlow(
   {
-    name: 'ensureDataQualityWithReasoningFlow',
-    inputSchema: EnsureDataQualityWithReasoningInputSchema,
-    outputSchema: EnsureDataQualityWithReasoningOutputSchema,
+    name: 'modifyDatasetEntryFlow',
+    inputSchema: ModifyDatasetEntryInputSchema,
+    outputSchema: ModifyDatasetEntryOutputSchema,
   },
-  async input => {
-    const {output} = await prompt(input);
-    return {
-      refinedDatasetEntry: output?.refinedDatasetEntry ?? 'Default Refined Entry',
-      reasoning: output?.reasoning ?? 'Default Reasoning',
-    };
+  async (input) => {
+    const {output} = await modifyEntryPrompt(input);
+    return output!;
   }
 );
