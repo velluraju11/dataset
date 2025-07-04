@@ -1,3 +1,4 @@
+
 'use server';
 
 /**
@@ -72,9 +73,9 @@ const generateSyntheticEntryFlow = ai.defineFlow(
       } else { // OpenRouter
           let modelName: string;
           if (input.apiKeyIndex === 3) { // Key 4
-            modelName = 'deepseek/deepseek-r1-distill-llama-70b:free';
-          } else { // Key 5 (apiKeyIndex === 4)
             modelName = 'google/gemini-2.0-flash-exp:free';
+          } else { // Key 5 (apiKeyIndex === 4)
+            modelName = 'deepseek/deepseek-r1-distill-llama-70b:free';
           }
 
           const systemPrompt = `You are an expert in generating humanized datasets. You will be given a Product Requirements Document. Your task is to generate a single, unique, and creative dataset entry in JSON format with "context", "input", and "output" fields.`;

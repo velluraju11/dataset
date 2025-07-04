@@ -148,7 +148,7 @@ export default function DataGeniusPage() {
 
   const isApiKeyError = (e: any): boolean => {
     const msg = e.message?.toLowerCase() || '';
-    return msg.includes('api key') || msg.includes('429') || msg.includes('rate limit') || msg.includes('permission denied');
+    return msg.includes('api key') || msg.includes('429') || msg.includes('rate limit') || msg.includes('permission denied') || msg.includes('401');
   };
   
   const downloadFile = (filename: string, content: string, mimeType: string) => {
@@ -303,12 +303,11 @@ export default function DataGeniusPage() {
       return;
     }
     
-    const activeKeyIndex = apiKeys.findIndex(key => key.trim());
-    if (activeKeyIndex === -1) {
+    const validKeyIndexes = apiKeys.map((key, i) => key.trim() ? i : -1).filter(i => i !== -1);
+    if (validKeyIndexes.length === 0) {
         toast({ variant: 'destructive', title: 'Error', description: 'A valid API key is required to modify entries.' });
         return;
     }
-    const activeApiKey = apiKeys[activeKeyIndex];
 
     const entriesToModify = idsToModify
       .map(id => fullDataRef.current.find(e => e.id === id))
@@ -338,6 +337,10 @@ export default function DataGeniusPage() {
 
     for (const entryToModify of entriesToModify) {
         try {
+            // Use the currently selected key for modification, or the first valid one.
+            const activeKeyIndex = validKeyIndexes.includes(currentApiKeyIndex) ? currentApiKeyIndex : validKeyIndexes[0];
+            const activeApiKey = apiKeys[activeKeyIndex];
+
             const modifiedEntry = await modifyDatasetEntry({
                 instruction: modificationInstruction,
                 entry: entryToModify,
@@ -404,18 +407,26 @@ export default function DataGeniusPage() {
                 <div className="space-y-4">
                   {apiKeys.map((key, index) => (
                     <div key={index} className="space-y-2">
-                      <Label htmlFor={`api-key-${index}`}>
-                        {index <= 2 ? (
-                          <>
-                            API Key {index + 1} (Google AI)
-                            {index === 0 && <span className="text-destructive">*</span>}
-                          </>
-                        ) : index === 3 ? (
-                          'API Key 4 (OpenRouter - DeepSeek R1)'
-                        ) : (
-                          'API Key 5 (OpenRouter - Gemini Flash Exp)'
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor={`api-key-${index}`}>
+                          {index <= 2 ? (
+                            <>
+                              API Key {index + 1} (Google AI)
+                              {index === 0 && <span className="text-destructive">*</span>}
+                            </>
+                          ) : index === 3 ? (
+                            'API Key 4 (OpenRouter - Gemini Flash Exp)'
+                          ) : (
+                            'API Key 5 (OpenRouter - DeepSeek R1)'
+                          )}
+                        </Label>
+                        {isGenerating && currentApiKeyIndex === index && (
+                          <span className="text-xs font-medium text-primary flex items-center gap-1">
+                            <Loader className="h-3 w-3 animate-spin" />
+                            Running
+                          </span>
                         )}
-                      </Label>
+                      </div>
                       <Input
                         id={`api-key-${index}`}
                         type="password"

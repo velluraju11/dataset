@@ -1,3 +1,4 @@
+
 'use server';
 
 /**
@@ -78,9 +79,9 @@ const modifyDatasetEntryFlow = ai.defineFlow(
       } else { // OpenRouter
         let modelName: string;
         if (input.apiKeyIndex === 3) { // Key 4
-          modelName = 'deepseek/deepseek-r1-distill-llama-70b:free';
-        } else { // Key 5 (apiKeyIndex === 4)
           modelName = 'google/gemini-2.0-flash-exp:free';
+        } else { // Key 5 (apiKeyIndex === 4)
+          modelName = 'deepseek/deepseek-r1-distill-llama-70b:free';
         }
         
         const systemPrompt = `You are an AI assistant that modifies dataset entries. You will be given a dataset entry with an 'id', 'context', 'input', and 'output'. You will also be given an instruction. Your task is to modify the 'context', 'input', and/or 'output' fields of the entry according to the instruction. You MUST maintain the original 'id'. The modified 'input' must still start with 'ryha'. The modified 'output' must still address the user as 'boss'. You must return only a raw JSON object for the modified entry.`;
