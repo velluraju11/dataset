@@ -181,18 +181,6 @@ export default function DataGeniusPage() {
       downloadFile('datagenius_dataset.json', jsonContent, 'application/json;charset=utf-8;');
   };
 
-  const findNextValidKeyIndex = (startIndex: number) => {
-      const validKeyIndexes = apiKeys.map((key, i) => key.trim() ? i : -1).filter(i => i !== -1);
-      if(validKeyIndexes.length === 0) return -1;
-      
-      const currentPositionInValid = validKeyIndexes.indexOf(startIndex);
-      // If the current key is not in the valid list, start from the first valid one.
-      if (currentPositionInValid === -1) return validKeyIndexes[0];
-      
-      const nextPositionInValid = (currentPositionInValid + 1) % validKeyIndexes.length;
-      return validKeyIndexes[nextPositionInValid];
-  }
-
   const handleGenerate = async () => {
     if (!prd.trim()) {
         toast({ variant: 'destructive', title: 'Error', description: 'Product Requirements Document (PRD) cannot be empty.' });
@@ -210,19 +198,22 @@ export default function DataGeniusPage() {
     isPausedByUserRef.current = false;
     isGeneratingRef.current = true;
     setIsGenerating(true);
-    let failingKeyCycleDetector: number[] = [];
+    
+    let localCurrentApiKeyIndex = currentApiKeyIndex;
+    const validKeyIndexes = apiKeys.map((key, i) => key.trim() ? i : -1).filter(i => i !== -1);
+
+    if (!validKeyIndexes.includes(localCurrentApiKeyIndex)) {
+        localCurrentApiKeyIndex = validKeyIndexes[0];
+        if (isMounted.current) setCurrentApiKeyIndex(localCurrentApiKeyIndex);
+    }
+
+    const failingKeyCycleDetector = new Set<number>();
     
     while (isGeneratingRef.current) {
         try {
-            const activeApiKey = apiKeys[currentApiKeyIndex];
-            if (!activeApiKey.trim()) {
-                const nextKeyIndex = findNextValidKeyIndex(currentApiKeyIndex);
-                if(nextKeyIndex !== -1 && nextKeyIndex !== currentApiKeyIndex) {
-                    setCurrentApiKeyIndex(nextKeyIndex);
-                    continue;
-                } else {
-                    throw new Error("No valid API keys available.");
-                }
+            const activeApiKey = apiKeys[localCurrentApiKeyIndex];
+            if (!activeApiKey || !activeApiKey.trim()) {
+                throw new Error("Skipping empty key.");
             }
 
             const result = await generateSyntheticEntry({ prd, temperature, apiKey: activeApiKey });
@@ -238,37 +229,38 @@ export default function DataGeniusPage() {
                 }
             }
             setError(null); 
-            failingKeyCycleDetector = []; // Reset on success
+            failingKeyCycleDetector.clear();
 
         } catch (e: any) {
-            console.error(e);
-            if (isApiKeyError(e)) {
-                
-                if(failingKeyCycleDetector.includes(currentApiKeyIndex)) {
-                     setError('All provided API keys seem to be failing. Stopping generation.');
-                     isGeneratingRef.current = false;
-                     break;
-                }
-                
-                failingKeyCycleDetector.push(currentApiKeyIndex);
-                setError(`API Key ${currentApiKeyIndex + 1} failed. Rotating keys...`);
+            console.error(`Error with API Key #${localCurrentApiKeyIndex + 1}:`, e);
 
-                const nextKeyIndex = findNextValidKeyIndex(currentApiKeyIndex);
-                
-                if (nextKeyIndex !== -1) {
-                    setCurrentApiKeyIndex(nextKeyIndex);
-                    await new Promise(res => setTimeout(res, 1000)); // Wait before retrying
-                } else {
-                    setError("API Key failed and no other keys are available. Stopping generation.");
+            if (isApiKeyError(e) || e.message === "Skipping empty key.") {
+                setError(`API Key ${localCurrentApiKeyIndex + 1} failed. Rotating keys...`);
+                failingKeyCycleDetector.add(localCurrentApiKeyIndex);
+
+                if (failingKeyCycleDetector.size >= validKeyIndexes.length) {
+                    setError('All provided API keys seem to be failing. Stopping generation.');
                     isGeneratingRef.current = false;
+                    break;
                 }
+
+                const currentPositionInValid = validKeyIndexes.indexOf(localCurrentApiKeyIndex);
+                const nextPositionInValid = (currentPositionInValid + 1) % validKeyIndexes.length;
+                localCurrentApiKeyIndex = validKeyIndexes[nextPositionInValid];
+                
+                if (isMounted.current) {
+                    setCurrentApiKeyIndex(localCurrentApiKeyIndex);
+                }
+                
+                await new Promise(res => setTimeout(res, 1000));
+
             } else {
                  setError(e.message || 'An unexpected error occurred. Pausing generation.');
                  if (isGeneratingRef.current && !isPausedByUserRef.current) {
                     setCountdown(10);
                  }
                  isGeneratingRef.current = false;
-                 break; // Exit the loop to wait for countdown
+                 break; 
             }
         }
     }
@@ -289,7 +281,7 @@ export default function DataGeniusPage() {
       return;
     }
     const activeApiKey = apiKeys[currentApiKeyIndex];
-     if (!activeApiKey) {
+     if (!activeApiKey.trim()) {
       toast({ variant: 'destructive', title: 'Error', description: 'A valid API key is required to modify entries.' });
       return;
     }
@@ -327,55 +319,46 @@ export default function DataGeniusPage() {
     setError(null);
     setModificationPreview(null);
 
+    const successfulResults: { original: DataEntry; modified: DataEntry }[] = [];
+    const failedIds: number[] = [];
+
     try {
-      const modificationPromises = entriesToModify.map(entryToModify =>
-        modifyDatasetEntry({
-          instruction: modificationInstruction,
-          entry: entryToModify,
-          apiKey: activeApiKey
-        }).then(modifiedEntry => ({
-          status: 'fulfilled',
-          value: { original: entryToModify, modified: modifiedEntry }
-        })).catch(error => ({
-          status: 'rejected',
-          reason: { id: entryToModify.id, error }
-        }))
-      );
+        for (const entryToModify of entriesToModify) {
+            try {
+                const modifiedEntry = await modifyDatasetEntry({
+                    instruction: modificationInstruction,
+                    entry: entryToModify,
+                    apiKey: activeApiKey
+                });
+                successfulResults.push({ original: entryToModify, modified: modifiedEntry });
+            } catch (e) {
+                console.error(`Failed to modify entry ${entryToModify.id}:`, e);
+                failedIds.push(entryToModify.id);
+            }
+        }
 
-      const results = await Promise.all(modificationPromises);
-      
-      const successfulResults = results
-        .filter(r => r.status === 'fulfilled')
-        .map(r => (r as any).value);
-        
-      const failedResults = results
-        .filter(r => r.status === 'rejected');
+        if (successfulResults.length > 0) {
+            const modifiedEntryMap = new Map(successfulResults.map(r => [r.modified.id, r.modified]));
+            
+            fullDataRef.current = fullDataRef.current.map(entry =>
+              modifiedEntryMap.get(entry.id) || entry
+            );
 
-      if (successfulResults.length > 0) {
-        const modifiedEntryMap = new Map(successfulResults.map(r => [r.modified.id, r.modified]));
-        
-        fullDataRef.current = fullDataRef.current.map(entry =>
-          modifiedEntryMap.get(entry.id) || entry
-        );
+            setDataPreview(prev => prev.map(entry =>
+              modifiedEntryMap.get(entry.id) || entry
+            ));
+            
+            setModificationPreview(successfulResults[successfulResults.length - 1]);
+            toast({ title: 'Success', description: `Modified ${successfulResults.length} entries.` });
+        }
 
-        setDataPreview(prev => prev.map(entry =>
-          modifiedEntryMap.get(entry.id) || entry
-        ));
-        
-        setModificationPreview(successfulResults[successfulResults.length - 1]);
-        toast({ title: 'Success', description: `Modified ${successfulResults.length} entries.` });
-      }
-
-      if (failedResults.length > 0) {
-        const failedIds = failedResults.map(r => (r as any).reason.id).join(', ');
-        console.error("Failed modifications:", failedResults);
-        toast({ variant: 'destructive', title: 'Modification Failed', description: `Failed to modify entries: ${failedIds}` });
-      }
-
+        if (failedIds.length > 0) {
+            toast({ variant: 'destructive', title: 'Modification Incomplete', description: `Failed to modify entries: ${failedIds.join(', ')}` });
+        }
     } catch (e: any) {
       console.error(e);
       setError(e.message || 'Failed to modify entries.');
-      toast({ variant: 'destructive', title: 'Modification Failed', description: e.message });
+      toast({ variant: 'destructive', title: 'Modification Error', description: e.message });
     } finally {
       setIsModifying(false);
       setModificationEntryIds('');
@@ -414,6 +397,8 @@ export default function DataGeniusPage() {
                     <div key={index} className="space-y-2">
                       <Label htmlFor={`api-key-${index}`}>
                         API Key {index + 1}
+                         {index === 0 && <span className="text-destructive">*</span>}
+                         {index > 0 && <span className="text-muted-foreground"> (optional)</span>}
                       </Label>
                       <Input
                         id={`api-key-${index}`}
@@ -522,8 +507,7 @@ export default function DataGeniusPage() {
                     </div>
 
                     {error && <p className="text-sm text-destructive flex items-center gap-2">
-                        {isGenerating && <Loader className="h-4 w-4 animate-spin"/>}
-                        {countdown !== null && <RefreshCw className="h-4 w-4 animate-spin"/>}
+                        {(isGenerating || countdown !== null) && <Loader className="h-4 w-4 animate-spin"/>}
                         {error}
                     </p>}
                 </div>
@@ -559,7 +543,7 @@ export default function DataGeniusPage() {
                           </TableBody>
                       </Table>
                     </div>
-                    {isGenerating && (
+                    {isGenerating && dataPreview.length === 0 && (
                         <div className="absolute inset-0 bg-background/80 flex items-center justify-center rounded-lg">
                             <Loader className="animate-spin text-primary h-10 w-10" />
                         </div>
