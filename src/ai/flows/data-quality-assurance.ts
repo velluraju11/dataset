@@ -65,11 +65,16 @@ const modifyDatasetEntryFlow = ai.defineFlow(
   },
   async (input) => {
     const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
+    const model = 'googleai/gemini-1.5-flash-latest';
+
     try {
       if (input.apiKey) {
         process.env.GOOGLE_API_KEY = input.apiKey;
       }
-      const {output} = await modifyEntryPrompt(input);
+
+      const {output} = await modifyEntryPrompt(input, {
+        model,
+      });
       return output!;
     } finally {
       process.env.GOOGLE_API_KEY = originalGoogleApiKey;

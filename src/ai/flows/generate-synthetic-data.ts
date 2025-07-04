@@ -58,13 +58,17 @@ const generateSyntheticEntryFlow = ai.defineFlow(
   },
   async (input) => {
     const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
+    const model = 'googleai/gemini-1.5-flash-latest';
+    let options = { config: { temperature: input.temperature } } as any;
+    
     try {
       if (input.apiKey) {
         process.env.GOOGLE_API_KEY = input.apiKey;
       }
 
       const {output} = await generateEntryPrompt(input, {
-        config: {temperature: input.temperature},
+        model,
+        ...options,
       });
       return output!;
     } finally {

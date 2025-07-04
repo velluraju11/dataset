@@ -401,7 +401,7 @@ export default function DataGeniusPage() {
                   <span>API Key Management</span>
                 </CardTitle>
                 <CardDescription>
-                  Provide up to {NUM_API_KEYS} Google AI keys. The generator will cycle through them if one fails.
+                  Provide up to {NUM_API_KEYS} Google AI keys. The generator will cycle through them.
                 </CardDescription>
               </CardHeader>
               <CardContent>
