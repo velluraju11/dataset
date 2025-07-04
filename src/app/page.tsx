@@ -79,7 +79,7 @@ export default function DataGeniusPage() {
   useEffect(() => {
     isMounted.current = true;
     try {
-        const savedKeysRaw = localStorage.getItem('gemini_api_keys');
+        const savedKeysRaw = localStorage.getItem('datagenius_api_keys');
         if (savedKeysRaw) {
             const savedKeys = JSON.parse(savedKeysRaw);
             if (Array.isArray(savedKeys) && savedKeys.length === NUM_API_KEYS) {
@@ -122,7 +122,7 @@ export default function DataGeniusPage() {
 
   const handleSaveKeys = () => {
     if (apiKeys.some(key => key.trim())) {
-      localStorage.setItem('gemini_api_keys', JSON.stringify(apiKeys));
+      localStorage.setItem('datagenius_api_keys', JSON.stringify(apiKeys));
       setAreApiKeysSaved(true);
       toast({
         title: 'Success',
@@ -244,10 +244,10 @@ export default function DataGeniusPage() {
             failingKeyCycleDetector.clear();
 
         } catch (e: any) {
-            console.error(`Error with API Key #${localCurrentApiKeyIndex + 1}:`, e);
+            console.error(`Error with API Key Index #${localCurrentApiKeyIndex}:`, e);
 
             if (isApiKeyError(e) || e.message === "Skipping empty key.") {
-                setError(`API Key ${localCurrentApiKeyIndex + 1} failed. Rotating keys...`);
+                setError(`API Key ${localCurrentApiKeyIndex + 1} failed. Rotating to next key...`);
                 failingKeyCycleDetector.add(localCurrentApiKeyIndex);
 
                 if (failingKeyCycleDetector.size >= validKeyIndexes.length) {
@@ -292,11 +292,6 @@ export default function DataGeniusPage() {
       toast({ variant: 'destructive', title: 'Error', description: 'Please provide Entry IDs and a modification instruction.' });
       return;
     }
-    const activeApiKey = apiKeys[currentApiKeyIndex];
-     if (!activeApiKey.trim()) {
-      toast({ variant: 'destructive', title: 'Error', description: 'A valid API key is required to modify entries.' });
-      return;
-    }
 
     const idsToModify = modificationEntryIds
       .split(',')
@@ -307,6 +302,13 @@ export default function DataGeniusPage() {
       toast({ variant: 'destructive', title: 'Error', description: 'Please enter valid, comma-separated Entry IDs.' });
       return;
     }
+    
+    const activeKeyIndex = apiKeys.findIndex(key => key.trim());
+    if (activeKeyIndex === -1) {
+        toast({ variant: 'destructive', title: 'Error', description: 'A valid API key is required to modify entries.' });
+        return;
+    }
+    const activeApiKey = apiKeys[activeKeyIndex];
 
     const entriesToModify = idsToModify
       .map(id => fullDataRef.current.find(e => e.id === id))
@@ -334,49 +336,43 @@ export default function DataGeniusPage() {
     const successfulResults: { original: DataEntry; modified: DataEntry }[] = [];
     const failedIds: number[] = [];
 
-    try {
-        for (const entryToModify of entriesToModify) {
-            try {
-                const modifiedEntry = await modifyDatasetEntry({
-                    instruction: modificationInstruction,
-                    entry: entryToModify,
-                    apiKey: activeApiKey,
-                    apiKeyIndex: currentApiKeyIndex
-                });
-                successfulResults.push({ original: entryToModify, modified: modifiedEntry });
-            } catch (e) {
-                console.error(`Failed to modify entry ${entryToModify.id}:`, e);
-                failedIds.push(entryToModify.id);
-            }
+    for (const entryToModify of entriesToModify) {
+        try {
+            const modifiedEntry = await modifyDatasetEntry({
+                instruction: modificationInstruction,
+                entry: entryToModify,
+                apiKey: activeApiKey,
+                apiKeyIndex: activeKeyIndex
+            });
+            successfulResults.push({ original: entryToModify, modified: modifiedEntry });
+        } catch (e) {
+            console.error(`Failed to modify entry ${entryToModify.id}:`, e);
+            failedIds.push(entryToModify.id);
         }
-
-        if (successfulResults.length > 0) {
-            const modifiedEntryMap = new Map(successfulResults.map(r => [r.modified.id, r.modified]));
-            
-            fullDataRef.current = fullDataRef.current.map(entry =>
-              modifiedEntryMap.get(entry.id) || entry
-            );
-
-            setDataPreview(prev => prev.map(entry =>
-              modifiedEntryMap.get(entry.id) || entry
-            ));
-            
-            setModificationPreview(successfulResults[successfulResults.length - 1]);
-            toast({ title: 'Success', description: `Modified ${successfulResults.length} entries.` });
-        }
-
-        if (failedIds.length > 0) {
-            toast({ variant: 'destructive', title: 'Modification Incomplete', description: `Failed to modify entries: ${failedIds.join(', ')}` });
-        }
-    } catch (e: any) {
-      console.error(e);
-      setError(e.message || 'Failed to modify entries.');
-      toast({ variant: 'destructive', title: 'Modification Error', description: e.message });
-    } finally {
-      setIsModifying(false);
-      setModificationEntryIds('');
-      setModificationInstruction('');
     }
+
+    if (successfulResults.length > 0) {
+        const modifiedEntryMap = new Map(successfulResults.map(r => [r.modified.id, r.modified]));
+        
+        fullDataRef.current = fullDataRef.current.map(entry =>
+          modifiedEntryMap.get(entry.id) || entry
+        );
+
+        setDataPreview(prev => prev.map(entry =>
+          modifiedEntryMap.get(entry.id) || entry
+        ));
+        
+        setModificationPreview(successfulResults[successfulResults.length - 1]);
+        toast({ title: 'Success', description: `Modified ${successfulResults.length} entries.` });
+    }
+
+    if (failedIds.length > 0) {
+        toast({ variant: 'destructive', title: 'Modification Incomplete', description: `Failed to modify entries: ${failedIds.join(', ')}` });
+    }
+
+    setIsModifying(false);
+    setModificationEntryIds('');
+    setModificationInstruction('');
   };
 
 
@@ -401,7 +397,7 @@ export default function DataGeniusPage() {
                   <span>API Key Management</span>
                 </CardTitle>
                 <CardDescription>
-                  Provide up to {NUM_API_KEYS} Google AI keys. The generator will cycle through them.
+                  Provide up to {NUM_API_KEYS} API keys. The generator will cycle through them.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -409,13 +405,25 @@ export default function DataGeniusPage() {
                   {apiKeys.map((key, index) => (
                     <div key={index} className="space-y-2">
                       <Label htmlFor={`api-key-${index}`}>
-                         API Key {index + 1} (Google AI)
-                         {index === 0 && <span className="text-destructive">*</span>}
+                        {index <= 2 ? (
+                          <>
+                            API Key {index + 1} (Google AI)
+                            {index === 0 && <span className="text-destructive">*</span>}
+                          </>
+                        ) : index === 3 ? (
+                          'API Key 4 (OpenRouter - DeepSeek R1)'
+                        ) : (
+                          'API Key 5 (OpenRouter - Gemini Flash Exp)'
+                        )}
                       </Label>
                       <Input
                         id={`api-key-${index}`}
                         type="password"
-                        placeholder={`Enter Google AI Key ${index + 1}`}
+                        placeholder={
+                          index <= 2
+                            ? `Enter Google AI Key ${index + 1}`
+                            : 'Enter OpenRouter API Key'
+                        }
                         value={key}
                         onChange={e => handleApiKeyChange(index, e.target.value)}
                       />
