@@ -84,7 +84,7 @@ export default function DataGeniusPage() {
             const savedKeys = JSON.parse(savedKeysRaw);
             if (Array.isArray(savedKeys) && savedKeys.length === NUM_API_KEYS) {
                 setApiKeys(savedKeys);
-                if (savedKeys[0]) {
+                if (savedKeys.some(key => key.trim())) {
                     setAreApiKeysSaved(true);
                 }
             }
@@ -115,10 +115,13 @@ export default function DataGeniusPage() {
     const newKeys = [...apiKeys];
     newKeys[index] = value;
     setApiKeys(newKeys);
+    if(areApiKeysSaved && !newKeys.some(k => k.trim())) {
+        setAreApiKeysSaved(false);
+    }
   };
 
   const handleSaveKeys = () => {
-    if (apiKeys[0].trim()) {
+    if (apiKeys.some(key => key.trim())) {
       localStorage.setItem('gemini_api_keys', JSON.stringify(apiKeys));
       setAreApiKeysSaved(true);
       toast({
@@ -130,7 +133,7 @@ export default function DataGeniusPage() {
     toast({
       variant: 'destructive',
       title: 'Error',
-      description: 'The first API Key is required.',
+      description: 'At least one API Key is required.',
     });
     return false;
   };
@@ -182,9 +185,12 @@ export default function DataGeniusPage() {
       const validKeyIndexes = apiKeys.map((key, i) => key.trim() ? i : -1).filter(i => i !== -1);
       if(validKeyIndexes.length === 0) return -1;
       
-      const currentPosition = validKeyIndexes.indexOf(startIndex);
-      const nextPosition = (currentPosition + 1) % validKeyIndexes.length;
-      return validKeyIndexes[nextPosition];
+      const currentPositionInValid = validKeyIndexes.indexOf(startIndex);
+      // If the current key is not in the valid list, start from the first valid one.
+      if (currentPositionInValid === -1) return validKeyIndexes[0];
+      
+      const nextPositionInValid = (currentPositionInValid + 1) % validKeyIndexes.length;
+      return validKeyIndexes[nextPositionInValid];
   }
 
   const handleGenerate = async () => {
@@ -193,24 +199,29 @@ export default function DataGeniusPage() {
         return;
     }
 
+    if (!areApiKeysSaved || !apiKeys.some(k => k.trim())) {
+        toast({ variant: 'destructive', title: 'Error', description: 'Please save at least one valid API key.' });
+        return;
+    }
+    
     if (isGeneratingRef.current) return;
 
     setError(null);
     isPausedByUserRef.current = false;
     isGeneratingRef.current = true;
     setIsGenerating(true);
-    let lastApiKeyErrorIndex = -1;
+    let failingKeyCycleDetector: number[] = [];
     
     while (isGeneratingRef.current) {
         try {
             const activeApiKey = apiKeys[currentApiKeyIndex];
-            if (!activeApiKey) {
+            if (!activeApiKey.trim()) {
                 const nextKeyIndex = findNextValidKeyIndex(currentApiKeyIndex);
-                if(nextKeyIndex !== -1) {
+                if(nextKeyIndex !== -1 && nextKeyIndex !== currentApiKeyIndex) {
                     setCurrentApiKeyIndex(nextKeyIndex);
                     continue;
                 } else {
-                    throw new Error("No valid API keys provided.");
+                    throw new Error("No valid API keys available.");
                 }
             }
 
@@ -226,36 +237,34 @@ export default function DataGeniusPage() {
                     setDataPreview(prev => [newEntry, ...prev].slice(0, 100));
                 }
             }
-            setError(null); // Clear previous errors on success
-            lastApiKeyErrorIndex = -1; // Reset on success
+            setError(null); 
+            failingKeyCycleDetector = []; // Reset on success
 
         } catch (e: any) {
             console.error(e);
             if (isApiKeyError(e)) {
-                setError(`API Key ${currentApiKeyIndex + 1} failed. Rotating keys...`);
                 
-                if (lastApiKeyErrorIndex === currentApiKeyIndex) {
-                    setError('All provided API keys are failing. Stopping generation.');
-                    isGeneratingRef.current = false;
-                    break;
+                if(failingKeyCycleDetector.includes(currentApiKeyIndex)) {
+                     setError('All provided API keys seem to be failing. Stopping generation.');
+                     isGeneratingRef.current = false;
+                     break;
                 }
-
-                if (lastApiKeyErrorIndex === -1) {
-                    lastApiKeyErrorIndex = currentApiKeyIndex;
-                }
+                
+                failingKeyCycleDetector.push(currentApiKeyIndex);
+                setError(`API Key ${currentApiKeyIndex + 1} failed. Rotating keys...`);
 
                 const nextKeyIndex = findNextValidKeyIndex(currentApiKeyIndex);
                 
                 if (nextKeyIndex !== -1) {
                     setCurrentApiKeyIndex(nextKeyIndex);
-                    await new Promise(res => setTimeout(res, 2000)); // Wait before retrying
+                    await new Promise(res => setTimeout(res, 1000)); // Wait before retrying
                 } else {
                     setError("API Key failed and no other keys are available. Stopping generation.");
                     isGeneratingRef.current = false;
                 }
             } else {
                  setError(e.message || 'An unexpected error occurred. Pausing generation.');
-                 if (isGeneratingRef.current) {
+                 if (isGeneratingRef.current && !isPausedByUserRef.current) {
                     setCountdown(10);
                  }
                  isGeneratingRef.current = false;
@@ -396,7 +405,7 @@ export default function DataGeniusPage() {
                   <span>API Key Management</span>
                 </CardTitle>
                 <CardDescription>
-                  Provide up to {NUM_API_KEYS} Gemini keys for generation. The first is required.
+                  Provide up to {NUM_API_KEYS} Gemini keys for generation. At least one is required.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -404,7 +413,7 @@ export default function DataGeniusPage() {
                   {apiKeys.map((key, index) => (
                     <div key={index} className="space-y-2">
                       <Label htmlFor={`api-key-${index}`}>
-                        API Key {index + 1} {index === 0 ? '(Required)' : '(Optional)'}
+                        API Key {index + 1}
                       </Label>
                       <Input
                         id={`api-key-${index}`}
