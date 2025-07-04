@@ -12,16 +12,17 @@ import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
 
 const DataEntrySchema = z.object({
-    id: z.number(),
-    context: z.string(),
-    input: z.string(),
-    output: z.string(),
+  id: z.number(),
+  context: z.string(),
+  input: z.string(),
+  output: z.string(),
 });
 
 const ModifyDatasetEntryInputSchema = z.object({
   instruction: z.string().describe('The user instruction for how to modify the dataset entry.'),
   entry: DataEntrySchema.describe('The dataset entry to modify.'),
   apiKey: z.string().optional().describe('The API key to use for the request.'),
+  apiKeyIndex: z.number().optional().describe('The index of the API key being used (0-4).'),
 });
 export type ModifyDatasetEntryInput = z.infer<typeof ModifyDatasetEntryInputSchema>;
 
@@ -63,7 +64,7 @@ const modifyDatasetEntryFlow = ai.defineFlow(
     outputSchema: ModifyDatasetEntryOutputSchema,
   },
   async (input) => {
-    const originalApiKey = process.env.GOOGLE_API_KEY;
+    const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
     try {
       if (input.apiKey) {
         process.env.GOOGLE_API_KEY = input.apiKey;
@@ -71,7 +72,7 @@ const modifyDatasetEntryFlow = ai.defineFlow(
       const {output} = await modifyEntryPrompt(input);
       return output!;
     } finally {
-      process.env.GOOGLE_API_KEY = originalApiKey;
+      process.env.GOOGLE_API_KEY = originalGoogleApiKey;
     }
   }
 );

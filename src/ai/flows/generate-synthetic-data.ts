@@ -15,17 +15,20 @@ const GenerateSyntheticEntryInputSchema = z.object({
   prd: z.string().describe('The Product Requirements Document to use as a basis for data generation.'),
   temperature: z.number().min(0).max(1).describe('The creativity temperature for the generation.'),
   apiKey: z.string().optional().describe('The API key to use for the request.'),
+  apiKeyIndex: z.number().optional().describe('The index of the API key being used (0-4).'),
 });
 export type GenerateSyntheticEntryInput = z.infer<typeof GenerateSyntheticEntryInputSchema>;
 
 const GenerateSyntheticEntryOutputSchema = z.object({
-    context: z.string().describe("A short, one-sentence scenario or background for the command."),
-    input: z.string().describe("The generated input command, which must start with 'ryha'."),
-    output: z.string().describe("The generated output response, which must address the user as 'boss'.")
+  context: z.string().describe("A short, one-sentence scenario or background for the command."),
+  input: z.string().describe("The generated input command, which must start with 'ryha'."),
+  output: z.string().describe("The generated output response, which must address the user as 'boss'."),
 });
 export type GenerateSyntheticEntryOutput = z.infer<typeof GenerateSyntheticEntryOutputSchema>;
 
-export async function generateSyntheticEntry(input: GenerateSyntheticEntryInput): Promise<GenerateSyntheticEntryOutput> {
+export async function generateSyntheticEntry(
+  input: GenerateSyntheticEntryInput
+): Promise<GenerateSyntheticEntryOutput> {
   return generateSyntheticEntryFlow(input);
 }
 
@@ -54,17 +57,18 @@ const generateSyntheticEntryFlow = ai.defineFlow(
     outputSchema: GenerateSyntheticEntryOutputSchema,
   },
   async (input) => {
-    const originalApiKey = process.env.GOOGLE_API_KEY;
+    const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
     try {
       if (input.apiKey) {
         process.env.GOOGLE_API_KEY = input.apiKey;
       }
+
       const {output} = await generateEntryPrompt(input, {
         config: {temperature: input.temperature},
       });
       return output!;
     } finally {
-      process.env.GOOGLE_API_KEY = originalApiKey;
+      process.env.GOOGLE_API_KEY = originalGoogleApiKey;
     }
   }
 );

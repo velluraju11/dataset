@@ -202,6 +202,13 @@ export default function DataGeniusPage() {
     let localCurrentApiKeyIndex = currentApiKeyIndex;
     const validKeyIndexes = apiKeys.map((key, i) => key.trim() ? i : -1).filter(i => i !== -1);
 
+    if (validKeyIndexes.length === 0) {
+      setError('No valid API keys available to start generation.');
+      setIsGenerating(false);
+      isGeneratingRef.current = false;
+      return;
+    }
+
     if (!validKeyIndexes.includes(localCurrentApiKeyIndex)) {
         localCurrentApiKeyIndex = validKeyIndexes[0];
         if (isMounted.current) setCurrentApiKeyIndex(localCurrentApiKeyIndex);
@@ -216,7 +223,12 @@ export default function DataGeniusPage() {
                 throw new Error("Skipping empty key.");
             }
 
-            const result = await generateSyntheticEntry({ prd, temperature, apiKey: activeApiKey });
+            const result = await generateSyntheticEntry({ 
+              prd, 
+              temperature, 
+              apiKey: activeApiKey,
+              apiKeyIndex: localCurrentApiKeyIndex
+            });
             
             if (isGeneratingRef.current) {
                 const newId = fullDataRef.current.length + 1;
@@ -328,7 +340,8 @@ export default function DataGeniusPage() {
                 const modifiedEntry = await modifyDatasetEntry({
                     instruction: modificationInstruction,
                     entry: entryToModify,
-                    apiKey: activeApiKey
+                    apiKey: activeApiKey,
+                    apiKeyIndex: currentApiKeyIndex
                 });
                 successfulResults.push({ original: entryToModify, modified: modifiedEntry });
             } catch (e) {
@@ -388,7 +401,7 @@ export default function DataGeniusPage() {
                   <span>API Key Management</span>
                 </CardTitle>
                 <CardDescription>
-                  Provide up to {NUM_API_KEYS} Gemini keys for generation. At least one is required.
+                  Provide up to {NUM_API_KEYS} Google AI keys. The generator will cycle through them if one fails.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -396,14 +409,13 @@ export default function DataGeniusPage() {
                   {apiKeys.map((key, index) => (
                     <div key={index} className="space-y-2">
                       <Label htmlFor={`api-key-${index}`}>
-                        API Key {index + 1}
+                         API Key {index + 1} (Google AI)
                          {index === 0 && <span className="text-destructive">*</span>}
-                         {index > 0 && <span className="text-muted-foreground"> (optional)</span>}
                       </Label>
                       <Input
                         id={`api-key-${index}`}
                         type="password"
-                        placeholder={`Enter API Key ${index + 1}`}
+                        placeholder={`Enter Google AI Key ${index + 1}`}
                         value={key}
                         onChange={e => handleApiKeyChange(index, e.target.value)}
                       />
