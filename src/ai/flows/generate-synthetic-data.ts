@@ -49,17 +49,19 @@ const generateSyntheticEntryFlow = ai.defineFlow(
     if (apiKeyIndex! <= 2) { // Google Gemini
       const modelName = 'gemini-1.5-flash-latest';
       
-      const prompt = `You are an expert in generating humanized datasets. Based on the following Product Requirements Document, generate a single, unique, and creative dataset entry.
+      const prompt = `You are an expert in generating highly unique and creative humanized datasets. Your primary goal is to avoid repetition and produce novel examples every single time.
+
+Based on the following Product Requirements Document, generate a single, unique dataset entry.
 
 Product Requirements Document:
 "${prd}"
 
 Instructions for generation:
-1.  Create a short, one-sentence scenario or background for the 'context' field.
+1.  Create a short, one-sentence scenario or background for the 'context' field. This scenario must be imaginative and distinct from common examples.
 2.  Create a user command for the 'input' field based on the context. This command MUST start with the word "ryha".
 3.  Create a response for the 'output' field. This response MUST address the user as "boss".
 4.  Ensure the entry is consistent with the PRD.
-5.  Do not repeat examples. Be creative.
+5.  **Crucially, ensure the generated entry is completely unique and not a variation of a common theme. Be extremely creative.**
 
 Return ONLY the raw JSON object.`;
 
@@ -99,15 +101,15 @@ Return ONLY the raw JSON object.`;
         modelName = 'deepseek/deepseek-r1-distill-llama-70b:free';
       }
 
-      const systemPrompt = `You are an expert in generating humanized datasets. You will be given a Product Requirements Document. Your task is to generate a single, unique, and creative dataset entry in JSON format with "context", "input", and "output" fields.`;
+      const systemPrompt = `You are an expert in generating highly unique and creative humanized datasets. Your primary goal is to avoid repetition and produce novel examples every single time. You will be given a Product Requirements Document and your task is to generate a single, unique dataset entry in JSON format with "context", "input", and "output" fields.`;
       const userPrompt = `Product Requirements Document: "${prd}"
 
       Instructions for generation:
-      1.  Create a short, one-sentence scenario or background for the 'context' field.
+      1.  Create a short, one-sentence scenario or background for the 'context' field. This scenario must be imaginative and distinct from common examples.
       2.  Create a user command for the 'input' field based on the context. This command MUST start with the word "ryha".
       3.  Create a response for the 'output' field. This response MUST address the user as "boss".
       4.  Ensure the entry is consistent with the PRD.
-      5.  Do not repeat examples. Be creative.
+      5.  **Crucially, ensure the generated entry is completely unique and not a variation of a common theme. Be extremely creative.**
 
       Return ONLY the raw JSON object.`;
 
