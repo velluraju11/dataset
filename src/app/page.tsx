@@ -26,7 +26,6 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Progress } from '@/components/ui/progress';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Table,
@@ -36,21 +35,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { Slider } from '@/components/ui/slider';
 import { Separator } from '@/components/ui/separator';
 
-const MAX_ENTRIES = 10000;
+const NUM_API_KEYS = 5;
 
 type DataEntry = {
   id: number;
@@ -60,16 +49,15 @@ type DataEntry = {
 };
 
 export default function DataGeniusPage() {
-  const [apiKey, setApiKey] = useState('');
-  const [tempApiKey, setTempApiKey] = useState('');
-  const [isApiKeySaved, setIsApiKeySaved] = useState(false);
+  const [apiKeys, setApiKeys] = useState<string[]>(Array(NUM_API_KEYS).fill(''));
+  const [areApiKeysSaved, setAreApiKeysSaved] = useState(false);
+  const [currentApiKeyIndex, setCurrentApiKeyIndex] = useState(0);
+
   const [prd, setPrd] = useState('');
   const [temperature, setTemperature] = useState(0.7);
   const [dataPreview, setDataPreview] = useState<DataEntry[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [showKeyDialog, setShowKeyDialog] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   
   const [modificationInstruction, setModificationInstruction] = useState('');
@@ -90,14 +78,23 @@ export default function DataGeniusPage() {
 
   useEffect(() => {
     isMounted.current = true;
-    const savedKey = localStorage.getItem('gemini_api_key');
-    if (savedKey) {
-      setApiKey(savedKey);
-      setIsApiKeySaved(true);
+    try {
+        const savedKeysRaw = localStorage.getItem('gemini_api_keys');
+        if (savedKeysRaw) {
+            const savedKeys = JSON.parse(savedKeysRaw);
+            if (Array.isArray(savedKeys) && savedKeys.length === NUM_API_KEYS) {
+                setApiKeys(savedKeys);
+                if (savedKeys[0]) {
+                    setAreApiKeysSaved(true);
+                }
+            }
+        }
+    } catch (e) {
+        console.error("Failed to load API keys from localStorage", e);
     }
     return () => {
       isMounted.current = false;
-      isGeneratingRef.current = false; // Stop generation on unmount
+      isGeneratingRef.current = false;
     };
   }, []);
   
@@ -114,21 +111,26 @@ export default function DataGeniusPage() {
       return () => clearTimeout(timer);
   }, [countdown]);
 
-  const handleSaveKey = (key: string) => {
-    if (key) {
-      setApiKey(key);
-      localStorage.setItem('gemini_api_key', key);
-      setIsApiKeySaved(true);
+  const handleApiKeyChange = (index: number, value: string) => {
+    const newKeys = [...apiKeys];
+    newKeys[index] = value;
+    setApiKeys(newKeys);
+  };
+
+  const handleSaveKeys = () => {
+    if (apiKeys[0].trim()) {
+      localStorage.setItem('gemini_api_keys', JSON.stringify(apiKeys));
+      setAreApiKeysSaved(true);
       toast({
         title: 'Success',
-        description: 'API Key saved successfully.',
+        description: 'API Keys saved successfully.',
       });
       return true;
     }
     toast({
       variant: 'destructive',
       title: 'Error',
-      description: 'API Key cannot be empty.',
+      description: 'The first API Key is required.',
     });
     return false;
   };
@@ -143,7 +145,7 @@ export default function DataGeniusPage() {
 
   const isApiKeyError = (e: any): boolean => {
     const msg = e.message?.toLowerCase() || '';
-    return msg.includes('api key') || msg.includes('429') || msg.includes('rate limit');
+    return msg.includes('api key') || msg.includes('429') || msg.includes('rate limit') || msg.includes('permission denied');
   };
   
   const downloadFile = (filename: string, content: string, mimeType: string) => {
@@ -176,6 +178,15 @@ export default function DataGeniusPage() {
       downloadFile('datagenius_dataset.json', jsonContent, 'application/json;charset=utf-8;');
   };
 
+  const findNextValidKeyIndex = (startIndex: number) => {
+      const validKeyIndexes = apiKeys.map((key, i) => key.trim() ? i : -1).filter(i => i !== -1);
+      if(validKeyIndexes.length === 0) return -1;
+      
+      const currentPosition = validKeyIndexes.indexOf(startIndex);
+      const nextPosition = (currentPosition + 1) % validKeyIndexes.length;
+      return validKeyIndexes[nextPosition];
+  }
+
   const handleGenerate = async () => {
     if (!prd.trim()) {
         toast({ variant: 'destructive', title: 'Error', description: 'Product Requirements Document (PRD) cannot be empty.' });
@@ -188,65 +199,77 @@ export default function DataGeniusPage() {
     isPausedByUserRef.current = false;
     isGeneratingRef.current = true;
     setIsGenerating(true);
+    let lastApiKeyErrorIndex = -1;
     
-    try {
-        while (fullDataRef.current.length < MAX_ENTRIES && isGeneratingRef.current) {
-            let successfulEntry = false;
-            let retries = 0;
-            
-            while(!successfulEntry && retries < 3 && isGeneratingRef.current) {
-                try {
-                    const result = await generateSyntheticEntry({ prd, temperature });
-                    
-                    if (isGeneratingRef.current) {
-                        const newId = fullDataRef.current.length + 1;
-                        const newEntry = { id: newId, ...result };
-
-                        fullDataRef.current.push(newEntry);
-                        
-                        if (isMounted.current) {
-                            setDataPreview(prev => [newEntry, ...prev].slice(0, 100));
-                            const newProgress = (fullDataRef.current.length / MAX_ENTRIES) * 100;
-                            setProgress(newProgress);
-                        }
-                    }
-                    successfulEntry = true;
-                    setError(null);
-
-                } catch (e: any) {
-                    console.error(e);
-                    if (isApiKeyError(e)) {
-                        setError('API key limit reached or invalid. Please provide a new key to resume.');
-                        setShowKeyDialog(true);
-                        isGeneratingRef.current = false;
-                        if(isMounted.current) setIsGenerating(false);
-                        return; // Stop and wait for user
-                    }
-                    retries++;
-                    setError(`An error occurred. Retrying... (Attempt ${retries})`);
-                    await new Promise(res => setTimeout(res, 5000));
+    while (isGeneratingRef.current) {
+        try {
+            const activeApiKey = apiKeys[currentApiKeyIndex];
+            if (!activeApiKey) {
+                const nextKeyIndex = findNextValidKeyIndex(currentApiKeyIndex);
+                if(nextKeyIndex !== -1) {
+                    setCurrentApiKeyIndex(nextKeyIndex);
+                    continue;
+                } else {
+                    throw new Error("No valid API keys provided.");
                 }
             }
-            if (!successfulEntry) {
-                 throw new Error("Failed to generate data after multiple retries. Pausing.");
+
+            const result = await generateSyntheticEntry({ prd, temperature, apiKey: activeApiKey });
+            
+            if (isGeneratingRef.current) {
+                const newId = fullDataRef.current.length + 1;
+                const newEntry = { id: newId, ...result };
+
+                fullDataRef.current.push(newEntry);
+                
+                if (isMounted.current) {
+                    setDataPreview(prev => [newEntry, ...prev].slice(0, 100));
+                }
+            }
+            setError(null); // Clear previous errors on success
+            lastApiKeyErrorIndex = -1; // Reset on success
+
+        } catch (e: any) {
+            console.error(e);
+            if (isApiKeyError(e)) {
+                setError(`API Key ${currentApiKeyIndex + 1} failed. Rotating keys...`);
+                
+                if (lastApiKeyErrorIndex === currentApiKeyIndex) {
+                    setError('All provided API keys are failing. Stopping generation.');
+                    isGeneratingRef.current = false;
+                    break;
+                }
+
+                if (lastApiKeyErrorIndex === -1) {
+                    lastApiKeyErrorIndex = currentApiKeyIndex;
+                }
+
+                const nextKeyIndex = findNextValidKeyIndex(currentApiKeyIndex);
+                
+                if (nextKeyIndex !== -1) {
+                    setCurrentApiKeyIndex(nextKeyIndex);
+                    await new Promise(res => setTimeout(res, 2000)); // Wait before retrying
+                } else {
+                    setError("API Key failed and no other keys are available. Stopping generation.");
+                    isGeneratingRef.current = false;
+                }
+            } else {
+                 setError(e.message || 'An unexpected error occurred. Pausing generation.');
+                 if (isGeneratingRef.current) {
+                    setCountdown(10);
+                 }
+                 isGeneratingRef.current = false;
+                 break; // Exit the loop to wait for countdown
             }
         }
-    } catch (e: any) {
-        console.error(e);
-        setError(e.message || 'An unexpected error occurred. Pausing generation.');
-    } finally {
-        if (!isMounted.current) return;
-        
-        const stoppedForError = !isPausedByUserRef.current && fullDataRef.current.length < MAX_ENTRIES;
-
-        isGeneratingRef.current = false;
+    }
+    
+    if (isMounted.current) {
         setIsGenerating(false);
-        
-        if (stoppedForError) {
-             setCountdown(10);
-        } else if (fullDataRef.current.length >= MAX_ENTRIES) {
-             toast({ title: "Success!", description: "Dataset generation complete." });
-             setProgress(100);
+        if (!isGeneratingRef.current && !isPausedByUserRef.current && !countdown) {
+            if(error) {
+                toast({ variant: 'destructive', title: 'Stopped', description: error });
+            }
         }
     }
 };
@@ -254,6 +277,11 @@ export default function DataGeniusPage() {
  const handleModifyEntry = async () => {
     if (!modificationInstruction.trim() || !modificationEntryIds.trim()) {
       toast({ variant: 'destructive', title: 'Error', description: 'Please provide Entry IDs and a modification instruction.' });
+      return;
+    }
+    const activeApiKey = apiKeys[currentApiKeyIndex];
+     if (!activeApiKey) {
+      toast({ variant: 'destructive', title: 'Error', description: 'A valid API key is required to modify entries.' });
       return;
     }
 
@@ -277,7 +305,7 @@ export default function DataGeniusPage() {
     if (notFoundIds.length > 0) {
       toast({
         variant: 'destructive',
-        title: 'Error',
+        title: 'Some entries not found',
         description: `Could not find entries with IDs: ${notFoundIds.join(', ')}.`,
       });
     }
@@ -295,29 +323,45 @@ export default function DataGeniusPage() {
         modifyDatasetEntry({
           instruction: modificationInstruction,
           entry: entryToModify,
+          apiKey: activeApiKey
         }).then(modifiedEntry => ({
-          original: entryToModify,
-          modified: modifiedEntry,
+          status: 'fulfilled',
+          value: { original: entryToModify, modified: modifiedEntry }
+        })).catch(error => ({
+          status: 'rejected',
+          reason: { id: entryToModify.id, error }
         }))
       );
 
       const results = await Promise.all(modificationPromises);
       
-      const modifiedEntryMap = new Map(results.map(r => [r.modified.id, r.modified]));
+      const successfulResults = results
+        .filter(r => r.status === 'fulfilled')
+        .map(r => (r as any).value);
+        
+      const failedResults = results
+        .filter(r => r.status === 'rejected');
 
-      fullDataRef.current = fullDataRef.current.map(entry =>
-        modifiedEntryMap.get(entry.id) || entry
-      );
+      if (successfulResults.length > 0) {
+        const modifiedEntryMap = new Map(successfulResults.map(r => [r.modified.id, r.modified]));
+        
+        fullDataRef.current = fullDataRef.current.map(entry =>
+          modifiedEntryMap.get(entry.id) || entry
+        );
 
-      setDataPreview(prev => prev.map(entry =>
-        modifiedEntryMap.get(entry.id) || entry
-      ));
-      
-      if (results.length > 0) {
-        setModificationPreview(results[results.length - 1]);
+        setDataPreview(prev => prev.map(entry =>
+          modifiedEntryMap.get(entry.id) || entry
+        ));
+        
+        setModificationPreview(successfulResults[successfulResults.length - 1]);
+        toast({ title: 'Success', description: `Modified ${successfulResults.length} entries.` });
       }
 
-      toast({ title: 'Success', description: `Modified ${results.length} entries.` });
+      if (failedResults.length > 0) {
+        const failedIds = failedResults.map(r => (r as any).reason.id).join(', ');
+        console.error("Failed modifications:", failedResults);
+        toast({ variant: 'destructive', title: 'Modification Failed', description: `Failed to modify entries: ${failedIds}` });
+      }
 
     } catch (e: any) {
       console.error(e);
@@ -352,34 +396,36 @@ export default function DataGeniusPage() {
                   <span>API Key Management</span>
                 </CardTitle>
                 <CardDescription>
-                  Enter your Gemini API key. It will be saved in your browser.
+                  Provide up to {NUM_API_KEYS} Gemini keys for generation. The first is required.
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-2">
-                  <Label htmlFor="api-key">Gemini API Key</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      id="api-key"
-                      type="password"
-                      placeholder="Enter your API key"
-                      defaultValue={apiKey}
-                      onChange={e => setTempApiKey(e.target.value)}
-                    />
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => handleSaveKey(tempApiKey || apiKey)}
-                      aria-label="Save API Key"
-                    >
-                      <Save className="h-4 w-4" />
+                <div className="space-y-4">
+                  {apiKeys.map((key, index) => (
+                    <div key={index} className="space-y-2">
+                      <Label htmlFor={`api-key-${index}`}>
+                        API Key {index + 1} {index === 0 ? '(Required)' : '(Optional)'}
+                      </Label>
+                      <Input
+                        id={`api-key-${index}`}
+                        type="password"
+                        placeholder={`Enter API Key ${index + 1}`}
+                        value={key}
+                        onChange={e => handleApiKeyChange(index, e.target.value)}
+                      />
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-4">
+                    <Button onClick={handleSaveKeys}>
+                      <Save className="mr-2" />
+                      Save Keys
                     </Button>
+                    {areApiKeysSaved && (
+                        <p className="text-sm text-green-600">
+                          API Keys are configured.
+                        </p>
+                      )}
                   </div>
-                   {isApiKeySaved && (
-                    <p className="text-sm text-green-600">
-                      API Key is configured.
-                    </p>
-                  )}
                 </div>
               </CardContent>
             </Card>
@@ -429,13 +475,13 @@ export default function DataGeniusPage() {
                   <span>AI Data Generation</span>
                 </CardTitle>
                 <CardDescription>
-                  Start the generation process. You can stop anytime.
+                  Start the generation process. It will run until stopped.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="flex flex-col sm:flex-row gap-4 mb-6">
                   {!isGenerating && countdown === null ? (
-                    <Button className="w-full sm:w-auto flex-grow bg-primary hover:bg-primary/90" onClick={handleGenerate} disabled={!isApiKeySaved || !prd}>
+                    <Button className="w-full sm:w-auto flex-grow bg-primary hover:bg-primary/90" onClick={handleGenerate} disabled={!areApiKeysSaved || !prd}>
                       <Play className="mr-2" />
                       Generate Dataset
                     </Button>
@@ -461,13 +507,13 @@ export default function DataGeniusPage() {
                         <div className="flex justify-between items-center">
                             <Label>Progress</Label>
                             <span className="text-sm font-medium text-primary">
-                                {fullDataRef.current.length.toLocaleString()} / {MAX_ENTRIES.toLocaleString()}
+                                {fullDataRef.current.length.toLocaleString()} entries generated
                             </span>
                         </div>
-                        <Progress value={progress} className="w-full" />
                     </div>
 
                     {error && <p className="text-sm text-destructive flex items-center gap-2">
+                        {isGenerating && <Loader className="h-4 w-4 animate-spin"/>}
                         {countdown !== null && <RefreshCw className="h-4 w-4 animate-spin"/>}
                         {error}
                     </p>}
@@ -540,15 +586,15 @@ export default function DataGeniusPage() {
                       <Label htmlFor="modify-instruction">Instruction</Label>
                       <Textarea
                         id="modify-instruction"
-                        placeholder="e.g., 'Make the output more enthusiastic.'"
                         className="min-h-[40px]"
+                        placeholder="e.g., 'Make the output more enthusiastic.'"
                         value={modificationInstruction}
                         onChange={(e) => setModificationInstruction(e.target.value)}
                         disabled={isModifying}
                       />
                     </div>
                   </div>
-                  <Button onClick={handleModifyEntry} disabled={isModifying} className="w-full sm:w-auto">
+                  <Button onClick={handleModifyEntry} disabled={isModifying || !areApiKeysSaved} className="w-full sm:w-auto">
                     {isModifying ? <Loader className="animate-spin mr-2" /> : <RefreshCw className="mr-2" />}
                     Modify Entries
                   </Button>
@@ -560,7 +606,7 @@ export default function DataGeniusPage() {
                   <Separator className="my-4" />
                   <CardHeader className="pt-0">
                     <CardTitle>Modification Preview (ID: {modificationPreview.original.id})</CardTitle>
-                    <CardDescription>Showing the last modified entry.</CardDescription>
+                    <CardDescription>Showing the last successfully modified entry.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -589,39 +635,6 @@ export default function DataGeniusPage() {
           </div>
         </div>
       </main>
-
-      <AlertDialog open={showKeyDialog} onOpenChange={setShowKeyDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>New API Key Required</AlertDialogTitle>
-            <AlertDialogDescription>
-              {error || 'The previous API key failed. Please enter a new Gemini API key to resume data generation.'}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="py-2">
-            <Label htmlFor="new-api-key" className="sr-only">New API Key</Label>
-            <Input
-              id="new-api-key"
-              type="password"
-              placeholder="Enter new Gemini API key"
-              onChange={(e) => setTempApiKey(e.target.value)}
-            />
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => isPausedByUserRef.current = true }>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => {
-              if (handleSaveKey(tempApiKey)) {
-                setShowKeyDialog(false);
-                setError(null);
-                handleGenerate();
-              }
-            }}>
-              Save and Resume
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
-

@@ -21,6 +21,7 @@ const DataEntrySchema = z.object({
 const ModifyDatasetEntryInputSchema = z.object({
   instruction: z.string().describe('The user instruction for how to modify the dataset entry.'),
   entry: DataEntrySchema.describe('The dataset entry to modify.'),
+  apiKey: z.string().optional().describe('The API key to use for the request.'),
 });
 export type ModifyDatasetEntryInput = z.infer<typeof ModifyDatasetEntryInputSchema>;
 
@@ -62,7 +63,15 @@ const modifyDatasetEntryFlow = ai.defineFlow(
     outputSchema: ModifyDatasetEntryOutputSchema,
   },
   async (input) => {
-    const {output} = await modifyEntryPrompt(input);
-    return output!;
+    const originalApiKey = process.env.GOOGLE_API_KEY;
+    try {
+      if (input.apiKey) {
+        process.env.GOOGLE_API_KEY = input.apiKey;
+      }
+      const {output} = await modifyEntryPrompt(input);
+      return output!;
+    } finally {
+      process.env.GOOGLE_API_KEY = originalApiKey;
+    }
   }
 );

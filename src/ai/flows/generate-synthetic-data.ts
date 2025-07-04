@@ -14,6 +14,7 @@ import {z} from 'genkit';
 const GenerateSyntheticEntryInputSchema = z.object({
   prd: z.string().describe('The Product Requirements Document to use as a basis for data generation.'),
   temperature: z.number().min(0).max(1).describe('The creativity temperature for the generation.'),
+  apiKey: z.string().optional().describe('The API key to use for the request.'),
 });
 export type GenerateSyntheticEntryInput = z.infer<typeof GenerateSyntheticEntryInputSchema>;
 
@@ -53,9 +54,17 @@ const generateSyntheticEntryFlow = ai.defineFlow(
     outputSchema: GenerateSyntheticEntryOutputSchema,
   },
   async (input) => {
-    const {output} = await generateEntryPrompt(input, {
-      config: {temperature: input.temperature},
-    });
-    return output!;
+    const originalApiKey = process.env.GOOGLE_API_KEY;
+    try {
+      if (input.apiKey) {
+        process.env.GOOGLE_API_KEY = input.apiKey;
+      }
+      const {output} = await generateEntryPrompt(input, {
+        config: {temperature: input.temperature},
+      });
+      return output!;
+    } finally {
+      process.env.GOOGLE_API_KEY = originalApiKey;
+    }
   }
 );
