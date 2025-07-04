@@ -33,24 +33,6 @@ export async function generateSyntheticEntry(
   return generateSyntheticEntryFlow(input);
 }
 
-const generateEntryPrompt = ai.definePrompt({
-  name: 'generateEntryPrompt',
-  input: {schema: GenerateSyntheticEntryInputSchema},
-  output: {schema: GenerateSyntheticEntryOutputSchema},
-  prompt: `You are an expert in generating humanized datasets. Based on the following Product Requirements Document, generate a single, unique, and creative dataset entry.
-
-Product Requirements Document:
-"{{{prd}}}"
-
-Instructions for generation:
-1.  Create a short, one-sentence scenario or background for the 'context' field.
-2.  Create a user command for the 'input' field based on the context. This command MUST start with the word "ryha".
-3.  Create a response for the 'output' field. This response MUST address the user as "boss".
-4.  Ensure the entry is consistent with the PRD.
-5.  Do not repeat examples. Be creative.
-`,
-});
-
 const generateSyntheticEntryFlow = ai.defineFlow(
   {
     name: 'generateSyntheticEntryFlow',
@@ -58,71 +40,106 @@ const generateSyntheticEntryFlow = ai.defineFlow(
     outputSchema: GenerateSyntheticEntryOutputSchema,
   },
   async (input) => {
-    const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
-    
-    try {
-      if (input.apiKeyIndex! <= 2) { // Google Gemini
-          if (input.apiKey) {
-              process.env.GOOGLE_API_KEY = input.apiKey;
-          }
-          const {output} = await generateEntryPrompt(input, {
-              model: 'googleai/gemini-1.5-flash-latest',
-              config: { temperature: input.temperature },
-          });
-          return output!;
-      } else { // OpenRouter
-          let modelName: string;
-          if (input.apiKeyIndex === 3) { // Key 4
-            modelName = 'google/gemini-2.0-flash-exp:free';
-          } else { // Key 5 (apiKeyIndex === 4)
-            modelName = 'deepseek/deepseek-r1-distill-llama-70b:free';
-          }
+    const { prd, temperature, apiKey, apiKeyIndex } = input;
 
-          const systemPrompt = `You are an expert in generating humanized datasets. You will be given a Product Requirements Document. Your task is to generate a single, unique, and creative dataset entry in JSON format with "context", "input", and "output" fields.`;
+    if (!apiKey) {
+      throw new Error('API key is required.');
+    }
 
-          const userPrompt = `Product Requirements Document: "${input.prd}"
+    if (apiKeyIndex! <= 2) { // Google Gemini
+      const modelName = 'gemini-1.5-flash-latest';
+      
+      const prompt = `You are an expert in generating humanized datasets. Based on the following Product Requirements Document, generate a single, unique, and creative dataset entry.
 
-          Instructions for generation:
-          1.  Create a short, one-sentence scenario or background for the 'context' field.
-          2.  Create a user command for the 'input' field based on the context. This command MUST start with the word "ryha".
-          3.  Create a response for the 'output' field. This response MUST address the user as "boss".
-          4.  Ensure the entry is consistent with the PRD.
-          5.  Do not repeat examples. Be creative.
+Product Requirements Document:
+"${prd}"
 
-          Return ONLY the raw JSON object.`;
+Instructions for generation:
+1.  Create a short, one-sentence scenario or background for the 'context' field.
+2.  Create a user command for the 'input' field based on the context. This command MUST start with the word "ryha".
+3.  Create a response for the 'output' field. This response MUST address the user as "boss".
+4.  Ensure the entry is consistent with the PRD.
+5.  Do not repeat examples. Be creative.
 
-          const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${input.apiKey}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'http://localhost:9002', // Required by some OpenRouter models
-                'X-Title': 'DataGenius' // Required by some OpenRouter models
-            },
-            body: JSON.stringify({
-                model: modelName,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt }
-                ],
-                temperature: input.temperature,
-                response_format: { "type": "json_object" }
-            })
-        });
+Return ONLY the raw JSON object.`;
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`OpenRouter API error: ${response.status} - ${errorText}`);
-        }
-
-        const data = await response.json();
-        const content = data.choices[0].message.content;
-        const parsedJson = JSON.parse(content);
-
-        return GenerateSyntheticEntryOutputSchema.parse(parsedJson);
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+                temperature: temperature,
+                responseMimeType: 'application/json',
+            }
+        })
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Google AI API error: ${response.status} - ${errorText}`);
       }
-    } finally {
-      process.env.GOOGLE_API_KEY = originalGoogleApiKey;
+
+      const data = await response.json();
+      if (!data.candidates || !data.candidates[0] || !data.candidates[0].content || !data.candidates[0].content.parts[0]) {
+          throw new Error('Invalid response structure from Google AI API');
+      }
+      const content = data.candidates[0].content.parts[0].text;
+      const parsedJson = JSON.parse(content);
+
+      return GenerateSyntheticEntryOutputSchema.parse(parsedJson);
+
+    } else { // OpenRouter
+      let modelName: string;
+      if (apiKeyIndex === 3) { // Key 4
+        modelName = 'google/gemini-2.0-flash-exp:free';
+      } else { // Key 5 (apiKeyIndex === 4)
+        modelName = 'deepseek/deepseek-r1-distill-llama-70b:free';
+      }
+
+      const systemPrompt = `You are an expert in generating humanized datasets. You will be given a Product Requirements Document. Your task is to generate a single, unique, and creative dataset entry in JSON format with "context", "input", and "output" fields.`;
+      const userPrompt = `Product Requirements Document: "${prd}"
+
+      Instructions for generation:
+      1.  Create a short, one-sentence scenario or background for the 'context' field.
+      2.  Create a user command for the 'input' field based on the context. This command MUST start with the word "ryha".
+      3.  Create a response for the 'output' field. This response MUST address the user as "boss".
+      4.  Ensure the entry is consistent with the PRD.
+      5.  Do not repeat examples. Be creative.
+
+      Return ONLY the raw JSON object.`;
+
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'http://localhost:9002', // Required by some OpenRouter models
+            'X-Title': 'DataGenius' // Required by some OpenRouter models
+        },
+        body: JSON.stringify({
+            model: modelName,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+            ],
+            temperature: temperature,
+            response_format: { "type": "json_object" }
+        })
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`OpenRouter API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices[0].message.content;
+    const parsedJson = JSON.parse(content);
+
+    return GenerateSyntheticEntryOutputSchema.parse(parsedJson);
     }
   }
 );
